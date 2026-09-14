@@ -17,7 +17,7 @@ const EVIDENCE = join(ROOT, "docs", "evidence", "phase2-live.md");
 const MAX = 6;
 const LINE = "@codex write a 5-line plan for a Node CLI that prints today's date in ISO format. @grok critique that plan in at most 5 numbered points. @codex revise the plan in 5 lines using the critique.";
 
-const home = process.env.COUNCIL_HOME || join(process.env.LOCALAPPDATA, "ObsidianCouncil", "live-proof-" + Date.now());
+const home = join(process.env.LOCALAPPDATA, "ObsidianCouncil", "live-proof-" + Date.now()); // always fresh; ignore inherited COUNCIL_HOME
 mkdirSync(home, { recursive: true });
 process.env.COUNCIL_HOME = home;
 
