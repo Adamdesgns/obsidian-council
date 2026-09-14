@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Obsidian Council — Floor</title>
+<style>
+  :root { color-scheme: dark; --bg:#0e0f12; --panel:#16171c; --line:#2a2b31; --text:#e8e8ea; --muted:#9aa; --accent:#7aa2ff; --danger:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); }
+  header code { color:var(--muted); }
+  main { display:grid; grid-template-columns:220px 1fr 280px; min-height:calc(100vh - 52px); }
+  aside, section { padding:12px; border-right:1px solid var(--line); background:var(--panel); }
+  #floor { display:flex; flex-direction:column; background:var(--bg); }
+  #log { flex:1; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; padding:8px; background:#0a0b0e; border:1px solid var(--line); border-radius:8px; }
+  #composer { display:flex; gap:8px; padding-top:8px; }
+  input, button, select { background:#1a1b21; color:var(--text); border:1px solid #333; padding:8px; border-radius:6px; }
+  button { cursor:pointer; }
+  button.danger { border-color:var(--danger); color:var(--danger); }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }
+  .row { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#222; font-size:12px; }
+  .pill.ok { background:#1e3a2f; }
+  .pill.halt { background:#3a1e1e; color:var(--danger); }
+  ul { list-style:none; padding:0; margin:0; }
+  li { padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>Obsidian Council</strong>
+  <span class="pill" id="haltPill">HALT?</span>
+  <code id="apiBase"></code>
+  <input id="ownerToken" type="password" placeholder="owner bearer token" style="margin-left:auto;min-width:220px"/>
+</header>
+<main>
+  <aside id="chambers">
+    <h2>Chambers</h2>
+    <div class="row">
+      <input id="chamberTitle" placeholder="title" style="flex:1"/>
+      <button id="createChamber">Create</button>
+    </div>
+    <div class="row">
+      <select id="chamberSelect" style="flex:1"></select>
+      <button id="summon">Summon</button>
+    </div>
+    <ul id="chamberList"></ul>
+  </aside>
+  <section id="floor">
+    <h2>Floor</h2>
+    <div id="log"></div>
+    <div id="composer">
+      <input id="say" placeholder="@codex @grok plan…" style="flex:1"/>
+      <button id="send">Say</button>
+    </div>
+  </section>
+  <aside>
+    <h2>Black Seat</h2>
+    <div id="sanctions"><em class="muted">No pending sanctions</em></div>
+    <div class="row" style="margin-top:8px">
+      <input id="sanHash" placeholder="content hash" style="flex:1"/>
+      <button id="approve">Approve</button>
+      <button id="reject" class="danger">Reject</button>
+    </div>
+    <h2 style="margin-top:16px">Members</h2>
+    <ul id="members"></ul>
+    <h2 style="margin-top:16px">HALT</h2>
+    <button id="haltToggle">Toggle HALT</button>
+    <button id="refresh">Refresh state</button>
+  </aside>
+</main>
+<script>
+const logEl = document.getElementById("log");
+const apiBase = location.origin;
+document.getElementById("apiBase").textContent = apiBase;
+let chamberId = localStorage.getItem("council.chamber") || "";
+let es = null;
+
+function token() { return document.getElementById("ownerToken").value.trim() || localStorage.getItem("council.ownerToken") || ""; }
+function saveToken() { localStorage.setItem("council.ownerToken", token()); }
+document.getElementById("ownerToken").addEventListener("change", saveToken);
+document.getElementById("ownerToken").value = localStorage.getItem("council.ownerToken") || "";
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+  if (token()) headers.Authorization = "Bearer " + token();
+  const res = await fetch(apiBase + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const text = await res.text();
+  let json = null; try { json = JSON.parse(text); } catch {}
+  if (!res.ok) throw new Error((json && json.error) || text || res.status);
+  return json;
+}
+
+function line(s) { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+async function refresh() {
+  try {
+    const st = await api("/owner/state");
+    document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
+    document.getElementById("haltPill").className = "pill " + (st.halt ? "halt" : "ok");
+    const ul = document.getElementById("chamberList");
+    ul.innerHTML = "";
+    const sel = document.getElementById("chamberSelect");
+    sel.innerHTML = "";
+    for (const c of st.chambers || []) {
+      const li = document.createElement("li");
+      li.textContent = c.title + " (" + c.id.slice(0,8) + ")";
+      ul.appendChild(li);
+      const opt = document.createElement("option");
+      opt.value = c.id; opt.textContent = c.title || c.id;
+      if (c.id === chamberId) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    const mu = document.getElementById("members");
+    mu.innerHTML = "";
+    for (const m of st.members || []) {
+      const li = document.createElement("li");
+      li.innerHTML = "<strong>" + m.id + "</strong> <span class='pill'>" + (m.kind || "") + "</span>";
+      mu.appendChild(li);
+    }
+  } catch (e) { line("state error: " + e.message); }
+}
+
+document.getElementById("createChamber").onclick = async () => {
+  const title = document.getElementById("chamberTitle").value || "Chamber";
+  const r = await api("/owner/chamber", { method: "POST", body: { title } });
+  chamberId = r.id; localStorage.setItem("council.chamber", chamberId);
+  line("created chamber " + r.id);
+  connectFloor();
+  refresh();
+};
+document.getElementById("summon").onclick = async () => {
+  chamberId = document.getElementById("chamberSelect").value || chamberId;
+  await api("/owner/summon", { method: "POST", body: { chamber_id: chamberId, members: ["codex","grok"] } });
+  line("summoned codex+grok");
+};
+document.getElementById("send").onclick = async () => {
+  const content = document.getElementById("say").value;
+  const at = [...content.matchAll(/@(\w+)/g)].map(m => m[1]);
+  chamberId = document.getElementById("chamberSelect").value || chamberId;
+  await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, recipients: at.length ? at : ["codex","grok"] } });
+  document.getElementById("say").value = "";
+  line("you: " + content);
+};
+document.getElementById("haltToggle").onclick = async () => {
+  const st = await api("/owner/state");
+  if (st.halt) await api("/owner/halt", { method: "DELETE" });
+  else await api("/owner/halt", { method: "POST", body: {} });
+  refresh();
+};
+document.getElementById("approve").onclick = async () => {
+  const content_hash = document.getElementById("sanHash").value.trim();
+  await api("/owner/sanction", { method: "POST", body: { content_hash, status: "approved" } });
+  line("sanction approved " + content_hash.slice(0,12));
+};
+document.getElementById("reject").onclick = async () => {
+  const content_hash = document.getElementById("sanHash").value.trim();
+  await api("/owner/sanction", { method: "POST", body: { content_hash, status: "rejected", approve: false } });
+  line("sanction rejected");
+};
+document.getElementById("refresh").onclick = refresh;
+
+function connectFloor() {
+  if (es) try { es.close(); } catch {}
+  if (!chamberId || !token()) return;
+  es = new EventSource(apiBase + "/owner/floor/" + chamberId); // EventSource cannot set Authorization — use fetch stream in a later polish; for now poll
+}
+// SSE with bearer: poll events via state for Phase 2
+setInterval(async () => {
+  if (!token()) return;
+  try {
+    const st = await api("/owner/state");
+    document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
+  } catch {}
+}, 4000);
+
+refresh();
+line("Floor ready. Paste owner token, create a chamber, summon, say.");
+</script>
+</body>
+</html>
