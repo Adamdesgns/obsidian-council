@@ -200,6 +200,7 @@ export function openStore(opts = {}) {
   }
 
   function close() {
+    try { db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* ignore */ }
     db.close();
   }
 
