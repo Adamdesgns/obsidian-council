@@ -1,61 +1,484 @@
-# Phase 2 live proof (P2-6d attempt 3)
+# Phase 2 live proof (P2-6e attempt 4)
 
-- At: 2026-09-14T11:04:20.623Z (UTC)
-- Home: `C:\Users\steam\AppData\Local\ObsidianCouncil\live-20260914-060403`
+- At: 2026-09-14T11:41:58.122Z (UTC)
+- Home: `C:\Users\steam\AppData\Local\ObsidianCouncil\live-20260914-062657`
 - Line: @codex write a 5-line plan for a Node CLI that prints today's date in ISO format. @grok critique that plan in at most 5 numbered points. @codex revise the plan in 5 lines using the critique.
 - Restarted after first chain reply: true
-- Runs: 8 / 6 (model runs excl. interrupted: 6)
+- Runs: 3 / 6 (model runs excl. interrupted: 2)
 - Chain ok: true
 - **Verdict: FAIL**
-  - FAIL condition: every codex/grok run exit===0 (excl. interrupted); got: codex:0, grok:1, codex:0, grok:1, codex:0, grok:0
-  - FAIL condition: three member messages with adapter final text (len>=40, not JSON); got 1 of 3
+  - FAIL condition: three member messages with adapter final text (len>=40, not JSON); got 2 of 2
 
 ## Run IDs (with bridge status)
 
-- f903f47e-eefd-46b7-8bbf-8b6bd31aacce codex exit=0 bridge=none started=2026-09-14T11:04:03.245Z
-- 19eff8fb-ee1a-4cc9-acf6-89a4f01e625e grok exit=1 bridge=unknown started=2026-09-14T11:04:03.267Z
-- d24d3401-df12-47a3-8602-fe7a0bbd2016 grok exit=interrupted bridge=none started=2026-09-14T11:04:08.938Z
-- 5ce13093-a415-4475-8377-c150199f7bcf codex exit=interrupted bridge=unknown started=2026-09-14T11:04:09.255Z
-- bcb198ec-55e1-42d8-8c85-7e29fa38439a codex exit=0 bridge=none started=2026-09-14T11:04:09.993Z
-- 4e65f217-5dbb-4fc3-9a7c-94388fe56e2e grok exit=1 bridge=unknown started=2026-09-14T11:04:10.006Z
-- 3ebbc71c-b262-4069-8ab0-b4eeb00541d1 codex exit=0 bridge=none started=2026-09-14T11:04:10.034Z
-- f0527334-64b3-4f33-b935-a6b5e6bec04e grok exit=0 bridge=none started=2026-09-14T11:04:15.682Z
+- f9d1cc65-7185-488c-b2bd-aa4b8cb18d05 codex exit=0 bridge=none started=2026-09-14T11:26:57.632Z
+- 6dd09f45-d449-4730-b8b0-69c12405a58c grok exit=interrupted bridge=none started=2026-09-14T11:27:07.717Z
+- caf5637e-8b07-417f-8e01-3e3e28996a39 grok exit=0 bridge=none started=2026-09-14T11:27:08.187Z
 
 ## Floor messages (first 300 chars)
 
-- **summon** from owner: "You are summoned."
 - **say** from owner: "@codex write a 5-line plan for a Node CLI that prints today's date in ISO format. @grok critique that plan in at most 5 numbered points. @codex revise the plan in 5 lines using the critique."
-- **respond** from codex: "Codex is here and ready."
-- **relay** from codex: "1. Create a dependency-free Node CLI file named today.js.\n2. Use new Date().toISOString().slice(0, 10) to get today’s UTC date.\n3. Print the date as YYYY-MM-DD followed by a newline.\n4. Run it with node today.js and verify the output format.\n5. Document that “today” means UTC, which can differ from "
-- **respond** from grok: "Present. Grok here. Ready."
+- **relay** from codex: "1. Create a Node CLI entry file with a Node shebang.\n2. Read the current date using the machine’s local timezone.\n3. Format the date as YYYY-MM-DD, padding month and day with zeros.\n4. Print the date followed by a newline to standard output.\n5. Verify formatting around midnight and year boundaries, "
+- **respond** from grok: "Critique of Codex’s plan:\n\n1. Shebang: use `#!/usr/bin/env node`, not a hardcoded Node path. Keep the file executable-intent clear, but the shebang is what matters for CLI entry.\n\n2. Timezone is the actual bug surface. `new Date()` is local, but `toISOString()`, `toJSON()`, and UTC getters (`getUTC*"
 
 ## Deliveries (answered / gens)
 
 - id=1 recipient=codex status=answered gen=1
 - id=2 recipient=grok status=answered gen=2
-- id=3 recipient=codex status=answered gen=2
-- id=4 recipient=owner status=pending gen=0
-- id=5 recipient=grok status=pending gen=0
-- id=6 recipient=owner status=pending gen=0
+- id=3 recipient=owner status=pending gen=0
 
 ## Log
 
 ```
-2026-09-14T11:04:03.235Z chamber 82ce0de5-d943-4db3-a9ca-79f86073900f
-2026-09-14T11:04:03.409Z dispatcher started
-2026-09-14T11:04:05.411Z runs=2 chainMemberMsgs=0 toOwner=0 restarted=false
-2026-09-14T11:04:07.420Z runs=2 chainMemberMsgs=0 toOwner=0 restarted=false
-2026-09-14T11:04:09.432Z runs=4 chainMemberMsgs=1 toOwner=1 restarted=false
-2026-09-14T11:04:09.432Z restart after first chain reply (hardStop mid follow-on run 5ce13093-a415-4475-8377-c150199f7bcf)
-2026-09-14T11:04:10.018Z dispatcher restarted
-2026-09-14T11:04:12.019Z runs=7 chainMemberMsgs=1 toOwner=1 restarted=true
-2026-09-14T11:04:12.019Z hit run cap
+2026-09-14T11:26:57.625Z chamber 8797b806-2125-436e-b071-f4986bc19b73
+2026-09-14T11:26:57.659Z dispatcher started
+2026-09-14T11:26:59.659Z runs=1 chainMemberMsgs=0 toOwner=0 restarted=false
+2026-09-14T11:27:01.674Z runs=1 chainMemberMsgs=0 toOwner=0 restarted=false
+2026-09-14T11:27:03.690Z runs=1 chainMemberMsgs=0 toOwner=0 restarted=false
+2026-09-14T11:27:05.706Z runs=1 chainMemberMsgs=0 toOwner=0 restarted=false
+2026-09-14T11:27:07.891Z runs=2 chainMemberMsgs=1 toOwner=0 restarted=false
+2026-09-14T11:27:07.891Z restart after first chain reply (hardStop mid follow-on run 6dd09f45-d449-4730-b8b0-69c12405a58c)
+2026-09-14T11:27:08.204Z dispatcher restarted
+2026-09-14T11:27:10.230Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:12.240Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:14.246Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:16.253Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:18.265Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:20.272Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:22.322Z runs=3 chainMemberMsgs=1 toOwner=0 restarted=true
+2026-09-14T11:27:24.343Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:26.354Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:28.363Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:30.384Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:32.388Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:34.404Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:36.434Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:38.444Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:40.466Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:42.477Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:44.488Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:46.506Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:48.516Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:50.542Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:52.549Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:54.567Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:56.582Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:27:58.587Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:00.606Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:02.641Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:04.644Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:06.655Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:08.681Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:10.693Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:12.712Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:14.721Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:16.727Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:18.758Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:20.807Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:22.810Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:24.827Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:26.828Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:28.834Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:30.839Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:32.851Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:34.861Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:36.868Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:38.882Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:40.895Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:42.905Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:44.928Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:46.933Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:48.944Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:50.956Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:52.973Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:54.986Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:56.995Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:28:59.026Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:01.038Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:03.046Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:05.075Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:07.090Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:09.095Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:11.116Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:13.164Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:15.173Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:17.184Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:19.202Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:21.224Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:23.231Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:25.241Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:27.290Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:29.305Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:31.310Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:33.314Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:35.325Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:37.334Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:39.342Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:41.343Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:43.359Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:45.369Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:47.380Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:49.397Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:51.411Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:53.423Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:55.437Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:57.452Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:29:59.458Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:01.458Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:03.466Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:05.467Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:07.480Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:09.494Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:11.501Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:13.524Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:15.529Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:17.547Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:19.559Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:21.564Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:23.605Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:25.617Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:27.626Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:29.639Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:31.656Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:33.705Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:35.712Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:37.735Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:39.755Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:41.765Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:43.776Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:45.785Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:47.796Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:49.828Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:51.833Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:53.842Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:55.846Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:57.846Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:30:59.874Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:01.880Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:03.887Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:05.892Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:07.920Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:09.924Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:11.936Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:13.953Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:15.966Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:17.978Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:19.983Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:21.985Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:24.000Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:26.004Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:28.036Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:30.048Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:32.063Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:34.103Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:36.141Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:38.158Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:40.163Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:42.170Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:44.202Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:46.228Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:48.268Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:50.282Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:52.285Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:54.286Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:56.297Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:31:58.324Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:00.329Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:02.344Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:04.348Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:06.354Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:08.369Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:10.397Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:12.398Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:14.418Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:16.471Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:18.494Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:20.502Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:22.514Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:24.526Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:26.556Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:28.565Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:30.571Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:32.586Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:34.591Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:36.622Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:38.631Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:40.659Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:42.674Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:44.674Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:46.680Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:48.684Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:50.726Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:52.740Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:54.744Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:56.751Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:32:58.764Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:00.771Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:02.799Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:04.844Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:06.845Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:08.868Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:10.869Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:12.874Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:14.908Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:16.916Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:18.938Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:20.942Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:22.950Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:24.965Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:26.988Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:29.001Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:31.017Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:33.031Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:35.036Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:37.045Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:39.053Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:41.063Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:43.082Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:45.096Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:47.100Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:49.175Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:51.192Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:53.232Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:55.237Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:57.250Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:33:59.252Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:01.262Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:03.281Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:05.289Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:07.299Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:09.300Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:11.308Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:13.333Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:15.339Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:17.367Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:19.374Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:21.382Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:23.405Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:25.497Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:27.506Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:29.519Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:31.531Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:33.546Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:35.578Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:37.589Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:39.591Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:41.594Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:43.609Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:45.682Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:47.708Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:49.752Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:51.765Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:53.772Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:55.799Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:57.812Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:34:59.827Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:01.852Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:03.873Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:05.890Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:07.908Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:09.912Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:11.921Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:13.938Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:15.943Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:17.958Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:19.963Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:21.968Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:23.971Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:25.983Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:27.998Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:30.005Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:32.021Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:34.025Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:36.032Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:38.048Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:40.072Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:42.107Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:44.111Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:46.112Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:48.121Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:50.133Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:52.167Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:54.180Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:56.204Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:35:58.220Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:00.257Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:02.259Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:04.264Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:06.276Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:08.282Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:10.297Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:12.303Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:14.362Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:16.367Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:18.380Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:20.392Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:22.402Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:24.419Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:26.419Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:28.445Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:30.448Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:32.461Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:34.490Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:36.506Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:38.523Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:40.524Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:42.532Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:44.545Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:46.559Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:48.563Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:50.584Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:52.598Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:54.600Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:56.604Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:36:58.612Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:00.620Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:02.630Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:04.634Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:06.667Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:08.683Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:10.697Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:12.703Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:14.716Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:16.742Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:18.744Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:20.766Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:22.783Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:24.786Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:26.793Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:28.796Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:30.802Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:32.815Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:34.825Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:36.836Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:38.841Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:40.845Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:42.860Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:44.872Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:46.886Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:48.900Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:50.916Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:52.923Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:54.935Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:56.939Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:37:58.945Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:00.956Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:02.962Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:04.976Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:07.031Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:09.044Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:11.045Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:13.047Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:15.048Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:17.063Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:19.087Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:21.094Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:23.109Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:25.108Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:27.123Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:29.139Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:31.142Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:33.152Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:35.158Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:37.166Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:39.171Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:41.176Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:43.187Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:45.204Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:47.217Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:49.218Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:51.234Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:53.246Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:55.257Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:57.266Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:38:59.270Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:01.285Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:03.300Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:05.311Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:07.312Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:09.325Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:11.329Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:13.333Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:15.337Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:17.342Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:19.353Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:21.362Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:23.400Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:25.408Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:27.422Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:29.437Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:31.449Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:33.458Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:35.470Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:37.471Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:39.473Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:41.479Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:43.482Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:45.496Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:47.504Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:49.515Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:51.521Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:53.533Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:55.539Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:57.543Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:39:59.544Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:01.547Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:03.561Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:05.567Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:07.579Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:09.583Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:11.589Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:13.598Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:15.614Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:17.629Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:19.637Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:21.642Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:23.644Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:25.647Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:27.650Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:29.658Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:31.661Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:33.667Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:35.674Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:37.684Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:39.688Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:41.706Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:43.720Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:45.723Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:47.737Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:49.756Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:51.772Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:53.784Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:55.800Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:57.813Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:40:59.822Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:01.856Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:03.867Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:05.879Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:07.881Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:09.893Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:11.907Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:13.909Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:15.925Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:17.938Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:19.949Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:21.962Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:23.975Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:25.983Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:27.996Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:30.001Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:32.015Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:34.017Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:36.025Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:38.028Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:40.030Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:42.034Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:44.039Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:46.046Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:48.053Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:50.069Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:52.080Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:54.090Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:56.097Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
+2026-09-14T11:41:58.112Z runs=3 chainMemberMsgs=2 toOwner=1 restarted=true
 ```
-
-## Attempt-3 notes (Morgan / executor)
-
-- Verdict FAIL as recorded above. **No re-run** (authority: one attempt).
-- Fresh home used: `C:\\Users\\steam\\AppData\\Local\\ObsidianCouncil\\live-20260914-060403` (inherited COUNCIL_HOME cleared; script minted `live-<stamp>`).
-- Codex runs recorded `bridge=none` (plain-text packet). Grok final success run also `bridge=none` (fallback path); earlier Grok non-zero rows left `bridge=unknown` because bridge is patched onto the final runId of a spawn path.
-- FAIL conditions: (1) not every model run exit===0 (two Grok exit=1); (2) fewer than 3 adapter-final-text member messages (got 1 of 3 — summon replies were short; only Codex plan met len>=40).
-- Met: verifyChain ok; at least one answered delivery with attempt_gen>=2; fresh home; runs excl. interrupted = 6 (cap).
