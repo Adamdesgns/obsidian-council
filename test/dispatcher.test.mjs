@@ -634,5 +634,109 @@ describe("P2-6 dispatcher", () => {
     }
   });
 
+  it("(l) three-hop chain survives restart between hop 2 and hop 3", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const limits = {
+      daily_ceiling: { codex: 100, grok: 100 },
+      timeout_ms: { codex: 15000, grok: 15000 },
+      dispatcher: { tick_ms: 40, max_member_hops: 4, max_auto_replies_per_owner_turn: 6 },
+    };
+    let d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex", "grok"],
+      tickMs: 40,
+      timeoutMs: 15000,
+      leaseMs: 60_000,
+      // Delay every fake run so we can hardStop mid hop-2 (grok)
+      env: { FAKE_DELAY_MS: "800" },
+      defaultRespond: true,
+      limits,
+    });
+    try {
+      d.ownerSay({
+        chamber_id: "chain-restart",
+        content: "@codex draft one line. @grok critique one line. @codex revise one line.",
+        idempotency_key: "chain-restart-3hop",
+      });
+      // Persist check: root message has chain + hop 0
+      const root = d.store.prepare(
+        "SELECT chain, chain_hop FROM messages WHERE idempotency_key='chain-restart-3hop'"
+      ).get();
+      assert.ok(root, "owner message missing");
+      const chainArr = JSON.parse(root.chain);
+      assert.deepEqual(chainArr, ["codex", "grok", "codex"]);
+      assert.equal(Number(root.chain_hop), 0);
+
+      d.start();
+      // Wait until hop 2 (grok) is in flight: root hop advanced to 1, grok run open
+      let grokOpen = null;
+      for (let i = 0; i < 80; i++) {
+        const hop = d.store.prepare(
+          "SELECT chain_hop FROM messages WHERE idempotency_key='chain-restart-3hop'"
+        ).get()?.chain_hop;
+        grokOpen = d.store.prepare(
+          "SELECT * FROM runs WHERE member='grok' AND ended IS NULL"
+        ).get();
+        if (Number(hop) >= 1 && grokOpen) break;
+        await sleep(50);
+      }
+      assert.ok(grokOpen, "expected in-flight grok (hop 2) run before restart");
+      assert.ok(
+        Number(d.store.prepare("SELECT chain_hop FROM messages WHERE idempotency_key='chain-restart-3hop'").get().chain_hop) >= 1,
+        "expected chain_hop advanced after hop 1"
+      );
+
+      d.hardStop();
+      const pending = [...d.active.values()].map((m) => m.promise).filter(Boolean);
+      await Promise.allSettled(pending);
+      await sleep(50);
+      try { d.outbox.close(); } catch { /* */ }
+      try { d.store.close(); } catch { /* */ }
+
+      // Fresh dispatcher — no in-memory chain map; must resume from DB
+      d = createDispatcher({
+        home,
+        useFake: true,
+        members: ["codex", "grok"],
+        tickMs: 40,
+        timeoutMs: 8000,
+        leaseMs: 60_000,
+        env: { FAKE_DELAY_MS: "0" },
+        defaultRespond: true,
+        limits,
+      });
+      d.start();
+      let toOwner = 0;
+      let hop3 = 0;
+      for (let i = 0; i < 100; i++) {
+        toOwner = d.store.prepare(
+          `SELECT COUNT(*) AS c FROM deliveries d
+           JOIN messages m ON m.id=d.message_id
+           WHERE d.recipient='owner' AND m.chamber_id='chain-restart'
+             AND m.kind IN ('respond','relay') AND m.sender IN ('codex','grok')`
+        ).get().c;
+        hop3 = d.store.prepare(
+          `SELECT COUNT(*) AS c FROM runs WHERE member='codex' AND chamber_id='chain-restart'`
+        ).get().c;
+        if (toOwner >= 1 && hop3 >= 2) break;
+        await sleep(50);
+      }
+      d.stop();
+      assert.ok(hop3 >= 2, "expected hop 3 (second codex run), got codex runs=" + hop3);
+      assert.ok(toOwner >= 1, "expected final reply to owner after restart");
+      const finalHop = Number(
+        d.store.prepare("SELECT chain_hop FROM messages WHERE idempotency_key='chain-restart-3hop'").get().chain_hop
+      );
+      assert.ok(finalHop >= 2, "expected chain_hop advanced to last hop, got " + finalHop);
+      const chainOk = d.store.verifyChain();
+      assert.equal(chainOk.ok, true, JSON.stringify(chainOk));
+    } finally {
+      try { await d.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
 
 });

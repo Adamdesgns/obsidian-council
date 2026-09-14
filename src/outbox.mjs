@@ -43,9 +43,13 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
 
         const id = envelope.id || api.uuid();
         const created = api.nowIso();
+        const chainJson = envelope.chain == null
+          ? null
+          : (typeof envelope.chain === "string" ? envelope.chain : JSON.stringify(envelope.chain));
+        const chainHop = envelope.chain_hop == null ? null : Number(envelope.chain_hop);
         api.prepare(
-          `INSERT INTO messages(id, chamber_id, sender, recipients, kind, parent_id, content, idempotency_key, created)
-           VALUES(?,?,?,?,?,?,?,?,?)`
+          `INSERT INTO messages(id, chamber_id, sender, recipients, kind, parent_id, content, idempotency_key, created, chain, chain_hop)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?)`
         ).run(
           id,
           envelope.chamber_id ?? null,
@@ -55,8 +59,17 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
           envelope.parent_id ?? null,
           typeof envelope.content === "string" ? envelope.content : JSON.stringify(envelope.content ?? ""),
           key,
-          created
+          created,
+          chainJson,
+          chainHop
         );
+
+        // P2-6f: advance root hop in the same commit as the next delivery
+        if (envelope.advance_chain && envelope.advance_chain.root_id != null) {
+          const rootId = envelope.advance_chain.root_id;
+          const nextHop = Number(envelope.advance_chain.hop);
+          api.prepare(`UPDATE messages SET chain_hop = ? WHERE id = ?`).run(nextHop, rootId);
+        }
 
         const deliveries = [];
         for (const recipient of recipients) {
@@ -87,6 +100,8 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
             content: typeof envelope.content === "string" ? envelope.content : JSON.stringify(envelope.content ?? ""),
             idempotency_key: key,
             created,
+            chain: chainJson,
+            chain_hop: chainHop,
           },
           deliveries,
           duplicate: false,
@@ -210,6 +225,10 @@ function rowToMessage(row) {
   } catch {
     recipients = [recipients];
   }
+  let chain = row.chain ?? null;
+  if (typeof chain === "string" && chain) {
+    try { chain = JSON.parse(chain); } catch { /* keep string */ }
+  }
   return {
     id: row.id,
     chamber_id: row.chamber_id,
@@ -220,6 +239,8 @@ function rowToMessage(row) {
     content: row.content,
     idempotency_key: row.idempotency_key,
     created: row.created,
+    chain,
+    chain_hop: row.chain_hop == null ? null : Number(row.chain_hop),
   };
 }
 

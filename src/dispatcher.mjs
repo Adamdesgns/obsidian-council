@@ -40,7 +40,6 @@ export function createDispatcher(opts = {}) {
   const maxAuto = limits.dispatcher?.max_auto_replies_per_owner_turn ?? 4;
   const members = opts.members || ["codex", "grok"];
   const active = new Map(); // key member::chamber -> run promise
-  const chainByMessage = new Map();
   const apiBase = opts.apiBase || process.env.COUNCIL_API_BASE || "";
   const presence = Object.fromEntries(members.map((m) => [m, { state: "idle", reason: null }]));
   const hopCount = new Map(); // chamber -> hops this owner turn
@@ -461,34 +460,45 @@ export function createDispatcher(opts = {}) {
       });
     }
 
-    // Directed @chain: advance hop index (supports repeated @codex entries).
+    // Directed @chain (P2-6f): state lives on the root owner message row in the DB.
     function resolveChainState(msg) {
-      const raw = chainByMessage.get(msg.id)
-        || (msg.parent_id && chainByMessage.get(msg.parent_id))
-        || null;
-      if (!raw) {
-        if (msg.sender === "owner") {
-          const c = parseAddressChain(msg.content);
-          if (c.length) return { chain: c, hop: 0 };
+      let cur = msg;
+      const seen = new Set();
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        let chain = cur.chain;
+        if (typeof chain === "string" && chain) {
+          try { chain = JSON.parse(chain); } catch { chain = null; }
         }
-        return null;
+        if (Array.isArray(chain) && chain.length) {
+          return { chain, hop: Number(cur.chain_hop) || 0, rootId: cur.id };
+        }
+        if (cur.sender === "owner") {
+          const c = parseAddressChain(cur.content);
+          if (c.length) return { chain: c, hop: Number(cur.chain_hop) || 0, rootId: cur.id };
+        }
+        if (!cur.parent_id) break;
+        cur = store.prepare("SELECT * FROM messages WHERE id = ?").get(cur.parent_id);
+        if (cur) {
+          // normalize via outbox shape for chain columns
+          let parsed = cur.chain;
+          if (typeof parsed === "string" && parsed) {
+            try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+          }
+          cur = { ...cur, chain: parsed, chain_hop: cur.chain_hop == null ? null : Number(cur.chain_hop) };
+        }
       }
-      if (Array.isArray(raw)) return { chain: raw, hop: 0 };
-      return raw;
+      return null;
     }
     const chainState = resolveChainState(message);
     let chainNext = null;
-    let nextState = null;
+    let advance = null;
     if (chainState && Array.isArray(chainState.chain)) {
       const hop = Number(chainState.hop) || 0;
-      // Current member should be chain[hop]; advance to hop+1
       if (hop < chainState.chain.length - 1) {
         chainNext = chainState.chain[hop + 1];
-        nextState = { chain: chainState.chain, hop: hop + 1 };
-      } else {
-        nextState = { chain: chainState.chain, hop: hop }; // last — return to owner
+        advance = { root_id: chainState.rootId, hop: hop + 1 };
       }
-      chainByMessage.set(message.id, chainState);
     }
 
     if (!outbound.length && opts.defaultRespond !== false) {
@@ -497,7 +507,7 @@ export function createDispatcher(opts = {}) {
       }
       const recipients = chainNext ? [chainNext] : ["owner"];
       if (chainNext) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
-      const sent = outbox.send({
+      outbox.send({
         sender: member,
         recipients,
         chamber_id: chamber === "_" ? null : chamber,
@@ -505,8 +515,8 @@ export function createDispatcher(opts = {}) {
         content: (text || result.stdout || "").slice(0, 2000) || "(empty)",
         parent_id: message.id,
         idempotency_key: `disp:${member}:${message.id}:respond:${gen}`,
+        advance_chain: advance || undefined,
       });
-      if (nextState && sent?.message?.id) chainByMessage.set(sent.message.id, nextState);
     }
 
     setPresence(member, "idle");
@@ -532,17 +542,16 @@ export function createDispatcher(opts = {}) {
     const chain = parseAddressChain(envelope.content || "");
     const first = chain[0] || (envelope.recipients || [])[0] || "codex";
     const recipients = chain.length ? [first] : (envelope.recipients || [first]);
+    // P2-6f: persist chain + hop=0 on the owner message in the same commit as send
     const sent = outbox.send({
       ...envelope,
       sender: "owner",
       recipients,
       kind: envelope.kind || "say",
       idempotency_key: envelope.idempotency_key || ("owner-say:" + Date.now()),
+      chain: chain.length ? chain : undefined,
+      chain_hop: chain.length ? 0 : undefined,
     });
-    if (chain.length && sent?.message?.id) {
-      chainByMessage.set(sent.message.id, { chain, hop: 0 });
-      store.commit("chain_set", "owner", (api) => api.setRef("messages", sent.message.id, { chain, hop: 0 }));
-    }
     return sent;
   }
 
@@ -602,7 +611,6 @@ export function createDispatcher(opts = {}) {
     ownerSay,
     summon,
     parseAddressChain,
-    chainByMessage,
   };
 }
 
