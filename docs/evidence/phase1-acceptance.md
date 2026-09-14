@@ -41,3 +41,13 @@
 | P2-6e summons spend nothing, Grok bridge off, output heads stored, bridge stamped | `4bc2383` | 36/36 | ACCEPTED 06:35 CT. Tests (g)–(k). Ready for live attempt 4 on Adam's go. |
 | P2-6 live proof, attempt 4 | `2dd837a` (11:41Z) | script said FAIL | **FAIL by one defect.** All runs exit 0; fresh home; restart mid-exchange; Grok re-run at gen 2; chain ok; Codex plan and a substantive Grok critique on the Floor (2 of 3 member messages). Third hop never fired: after the restart Grok's reply was routed to the owner because the directed-chain position is an in-memory Map. P2-6f: persist chain state in the store; restart-between-hops test. Attempt 5 pre-authorised. Runs: Codex 1, Grok 1 (+1 interrupted). Adam: "Don't stop until it works." |
 | P2-6f persist chain state | `026c94b` | 37/37 | ACCEPTED 07:00 CT. Migration 002 adds `chain` and `chain_hop` to messages; dispatcher reads chain state from the store only; restart-between-hops test (l) passes. |
+| **P2-6 live proof, attempt 5** | `63d2eed` (11:47Z) | **PASS**, verified independently from the database by Claude | All model runs exit 0 (one interrupted by the deliberate restart); three plain-text member messages (343 / 698 / 379 chars): Codex plan → Grok review → Codex revision; Grok's delivery answered at attempt_gen 2 after the restart; `verifyChain` ok over 38 events; 3 of 6 runs; fresh home; bridges `none` (plain-text path). Nobody copied anything. **Phase 2 complete.** `phase2/floor` merged into `main` at `06e9644`; suite 37/37 on a fresh home (a stale `.home` in the reviewer's checkout produced one spurious failure: Phase 3 item, tests must mint their own temp home). |
+
+## Carried into Phase 3
+
+- Codex MCP tool calls under `approval_policy=never` need a per-server approval key (question to Codex on the bus, unanswered).
+- Grok bridge: project `.grok/config.toml` makes headless Grok exit 1; certify separately or keep plain-text.
+- Claude CLI login (Adam) so Claude can join the Floor.
+- Grok reports `total_cost_usd` per run; Adam to confirm billing.
+- Tests should create their own temp `COUNCIL_HOME`.
+- Cosmetic: live evidence title still says "attempt 4" in the attempt-5 file.
