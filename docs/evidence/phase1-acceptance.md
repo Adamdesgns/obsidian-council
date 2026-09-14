@@ -15,9 +15,16 @@
 ## Decisions and follow-ups
 
 1. **Claude CLI login (Adam).** Until renewed, the Council's two live members are Codex and Grok.
-2. **Codex Build lane (Codex to diagnose).** Question sent on the bus with the exact rejection text. Until answered, Codex is review-only; nobody gets a Build lane.
+2. **Codex Build lane: CERTIFIED by A3b (01:12 CT).** Codex's diagnosis, proven from its own rollout record: `--ignore-user-config` dropped `windows.sandbox="elevated"`, so A3 ran read-only with approvals `never`. The Windows sandbox was already set up (CodexSandboxOffline/Online accounts); no owner setup step needed. `spike/a3b-sandbox-explicit.mjs` re-ran the escape test with `-c windows.sandbox="elevated" -c approval_policy="never" -c sandbox_workspace_write.network_access=false` plus temp exclusions, and read the effective policy back from the rollout: `{"type":"workspace-write","network_access":false,...}`, `approval_policy: never`. Inside write PASS; `node --test` ran but failed with EPERM touching Adam's AppData (the sandbox user needs an in-workspace HOME/TEMP for test runs); outside write access denied; curl exit 1 with no output; no orphan survived. One Codex run (spike total Codex 8/10).
 3. **Grok reports dollars.** `total_cost_usd` was non-zero on every Grok run (about 1.3 cents per PONG). Whether that is informational under a subscription or actual API billing is unknown from here; `grok inspect` shows `api_key_auth_disabled: false`. Adam to confirm in the morning; total exposure so far is under 10 cents, and Grok runs stay capped by the ledger.
 4. **Bus file encoding.** Morgan's tooling re-saved the drop with em-dashes mangled (UTF-8 read as cp1252). Harmless here; the Council's own exports must write UTF-8 explicitly.
 5. **Context cost.** Each Codex PONG costs ~23k input tokens (skills context) and each Grok PONG ~19k. Phase 2 packets must be short; the session-resume path matters for cost, not just memory.
 
-**Phase 1 spike: PASSED (00:58 CT).** Phase 2 opened for Morgan at 01:05 CT with `docs/PHASE2-ASSIGNMENTS.md`. Open items carried forward: Claude CLI login (Adam), Codex Build-lane diagnosis (Codex), Grok cost confirmation (Adam).
+**Phase 1 spike: PASSED (00:58 CT). Codex Build lane certified (A3b, 01:12 CT).** Phase 2 opened for Morgan at 01:05 CT with `docs/PHASE2-ASSIGNMENTS.md`. Open items carried forward: Claude CLI login (Adam), Grok cost confirmation (Adam).
+
+## Phase 2 task acceptance (clean detached worktree per commit, `node --test`)
+
+| Task | Commit | Tests | Verdict |
+|---|---|---|---|
+| P2-1 store and record | `732f117` | 3/3 | ACCEPTED 01:25 CT. One transaction per write, hash-chained events, transactional migrations, real two-process serialization test. |
+| P2-2 outbox and leases | `e9ef1a1` | 7/7 (incl. P2-1) | ACCEPTED 01:30 CT. Claim selects and conditionally updates on `attempt_gen` inside the store transaction; ack re-checks the generation in-transaction and records `stale_result_refused`. Nit for later: `ack` peeks the generation outside the transaction only to pick the event kind; harmless, since the in-transaction check governs. |
