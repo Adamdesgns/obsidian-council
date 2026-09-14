@@ -30,7 +30,7 @@
 <header>
   <strong>Obsidian Council</strong>
   <span class="pill" id="haltPill">HALT?</span>
-  <code id="apiBase"></code>
+
   <input id="ownerToken" type="password" placeholder="owner bearer token" style="margin-left:auto;min-width:220px"/>
 </header>
 <main>
@@ -72,7 +72,7 @@
 <script>
 const logEl = document.getElementById("log");
 const apiBase = location.origin;
-document.getElementById("apiBase").textContent = apiBase;
+
 let chamberId = localStorage.getItem("council.chamber") || "";
 let es = null;
 
