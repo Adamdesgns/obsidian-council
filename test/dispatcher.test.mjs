@@ -503,4 +503,136 @@ describe("P2-6 dispatcher", () => {
   });
 
 
+
+  it("(i) summon does not spend model runs", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex", "grok"],
+      tickMs: 40,
+      timeoutMs: 3000,
+      defaultRespond: true,
+      limits: {
+        daily_ceiling: { codex: 100, grok: 100 },
+        timeout_ms: { codex: 3000, grok: 3000 },
+        dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+      },
+    });
+    try {
+      const r = d.summon(["codex", "grok"], "summon-chamber");
+      assert.deepEqual(r.invited, ["codex", "grok"]);
+      assert.equal(d.presence.codex.state, "invited");
+      assert.equal(d.presence.grok.state, "invited");
+      d.start();
+      await sleep(200);
+      d.stop();
+      const runs = d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c;
+      assert.equal(runs, 0, "summon must not create model runs, got " + runs);
+      const msgs = d.store.prepare("SELECT COUNT(*) AS c FROM messages WHERE kind = 'summon'").get().c;
+      assert.equal(msgs, 0, "summon must create no summon messages, got " + msgs);
+      const ev = d.store.getEvents().filter((e) => e.kind === "member_invited");
+      assert.ok(ev.length >= 1, "expected member_invited event");
+    } finally {
+      await d.close();
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+  it("(j) Grok spawns with bridge=none by default (plain-text)", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["grok"],
+      tickMs: 40,
+      timeoutMs: 3000,
+      defaultRespond: true,
+      tokens: { grok: "test-grok-token-xyz" },
+      limits: {
+        daily_ceiling: { grok: 100 },
+        timeout_ms: { grok: 3000 },
+        dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+      },
+    });
+    try {
+      d.outbox.send({
+        sender: "owner",
+        recipient: "grok",
+        chamber_id: "grok-bridge-off",
+        kind: "say",
+        content: "hello grok plain",
+        idempotency_key: "grok-bridge-off-1",
+      });
+      d.start();
+      let run = null;
+      for (let i = 0; i < 40; i++) {
+        run = d.store.prepare("SELECT * FROM runs WHERE ended IS NOT NULL ORDER BY started DESC LIMIT 1").get();
+        if (run) break;
+        await sleep(50);
+      }
+      d.stop();
+      assert.ok(run, "expected finished grok run");
+      const cp = JSON.parse(run.checkpoint || "{}");
+      assert.equal(cp.bridge, "none", "grok bridge must be none by default, got " + cp.bridge);
+      const toml = join(home, "workspaces", "grok", "grok-bridge-off", ".grok", "config.toml");
+      assert.equal(existsSync(toml), false, "must not write .grok/config.toml when bridge=none");
+    } finally {
+      await d.close();
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+  it("(k) non-zero-exit run row carries fake stderr_head text", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex"],
+      tickMs: 40,
+      timeoutMs: 3000,
+      defaultRespond: true,
+      env: { FAKE_MODE: "fail-nonzero" },
+      limits: {
+        daily_ceiling: { codex: 100 },
+        timeout_ms: { codex: 3000 },
+        dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+      },
+    });
+    try {
+      d.outbox.send({
+        sender: "owner",
+        recipient: "codex",
+        chamber_id: "nz-head",
+        kind: "say",
+        content: "please fail with stderr",
+        idempotency_key: "nz-head-1",
+      });
+      d.start();
+      let run = null;
+      for (let i = 0; i < 40; i++) {
+        run = d.store.prepare(
+          "SELECT * FROM runs WHERE ended IS NOT NULL AND exit IS NOT NULL AND exit != 0 ORDER BY started DESC LIMIT 1"
+        ).get();
+        if (run) break;
+        await sleep(50);
+      }
+      d.stop();
+      assert.ok(run, "expected non-zero-exit run");
+      assert.notEqual(Number(run.exit), 0, "exit should be non-zero");
+      const cp = JSON.parse(run.checkpoint || "{}");
+      assert.ok(typeof cp.stderr_head === "string" && cp.stderr_head.length > 0, "stderr_head must be non-empty");
+      assert.match(cp.stderr_head, /bridge boom|Error: Failed|fail-nonzero/i, "stderr_head missing fake text: " + cp.stderr_head);
+      assert.ok(Buffer.byteLength(cp.stderr_head, "utf8") <= 2048, "stderr_head too large");
+      assert.ok(typeof cp.stdout_head === "string", "stdout_head missing");
+    } finally {
+      await d.close();
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+
 });

@@ -235,6 +235,14 @@ export function createDispatcher(opts = {}) {
       return;
     }
     const { delivery, message, gen } = claimed;
+
+    // P2-6e: summons never spend model runs — presence invited only.
+    if (message.kind === "summon") {
+      setPresence(member, "invited");
+      try { outbox.ack(delivery, gen, { actor: member, status: "answered" }); } catch { /* */ }
+      return;
+    }
+
     setPresence(member, "responding");
 
     // Session resume
@@ -250,8 +258,8 @@ export function createDispatcher(opts = {}) {
       sender: message.sender,
       content: message.content,
     };
-    // P2-6d: Codex always plain-text / bridge=none until approval-key is answered.
-    const plainText = member === "codex" || !!opts.disableBridge;
+    // P2-6d/e: Codex + Grok plain-text / bridge=none (bridge cert is Phase 3).
+    const plainText = member === "codex" || member === "grok" || !!opts.disableBridge;
     let packet = buildPacket({ member, chamber, message: msgPayload, plainText });
 
     const cwd = join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
@@ -260,7 +268,7 @@ export function createDispatcher(opts = {}) {
       cwd,
       token: tokens[member],
       apiBase,
-      disabled: !!opts.disableBridge || member === "codex",
+      disabled: !!opts.disableBridge || member === "codex" || member === "grok",
     });
     const spawnOpts = {
       chamber_id: chamber === "_" ? null : chamber,
@@ -287,6 +295,23 @@ export function createDispatcher(opts = {}) {
       spawnOpts.env = { ...spawnOpts.env, ...opts.refuseResumeEnv };
     }
 
+    const pathRunIds = [];
+    const HEAD = 2048;
+    function noteRun(res, status) {
+      if (!res?.runId) return;
+      pathRunIds.push(res.runId);
+      patchRunCheckpoint(res.runId, member, {
+        bridge: status,
+        stdout_head: String(res.stdout || "").slice(0, HEAD),
+        stderr_head: String(res.stderr || "").slice(0, HEAD),
+      });
+    }
+    function stampBridgeAll(status, extra = {}) {
+      for (const id of pathRunIds) {
+        patchRunCheckpoint(id, member, { bridge: status, ...extra });
+      }
+    }
+
     let result;
     try {
       result = await spawnMember(store, member, packet, spawnOpts);
@@ -296,6 +321,7 @@ export function createDispatcher(opts = {}) {
 
     let bridgeStatus = bridge.bridge;
     try { bridge.cleanup(); } catch { /* */ }
+    noteRun(result, bridgeStatus);
 
     // P2-6d item 2: resume failure -> session_replaced -> retry once without resume (not run_failed).
     if (isResumeFailure(result, resume, opts.refuseResumeOnce && resume)) {
@@ -320,9 +346,12 @@ export function createDispatcher(opts = {}) {
         env: { ...(opts.env || {}), ...(opts.retryEnv || {}), ...(bridge.env || {}) },
         extraArgs: bridge.extraArgs || [],
       });
+      noteRun(result, bridgeStatus);
+      stampBridgeAll(bridgeStatus);
     }
 
-    // P2-6d item 5: Grok with project bridge exits non-zero (and not a resume failure) -> retry bridge=none.
+    let mixedBridgeFallback = false;
+    // P2-6d item 5 / P2-6e: if a project bridge was used and failed, retry bridge=none; stamp every run row.
     if (
       member === "grok" &&
       bridgeStatus === "grok-project-config" &&
@@ -330,6 +359,8 @@ export function createDispatcher(opts = {}) {
       classifyRunFailure(result)
     ) {
       removeGrokBridgeConfig(cwd);
+      // Keep the failed row explaining it used the project bridge; then fall back.
+      stampBridgeAll("grok-project-config");
       bridgeStatus = "none";
       bridge = noneBridge();
       packet = buildPacket({ member, chamber, message: msgPayload, plainText: true });
@@ -341,9 +372,12 @@ export function createDispatcher(opts = {}) {
         env: { ...(opts.env || {}), ...(opts.retryEnv || {}) },
         extraArgs: [],
       });
+      noteRun(result, bridgeStatus);
+      mixedBridgeFallback = true;
     }
 
-    patchRunCheckpoint(result?.runId, member, { bridge: bridgeStatus });
+    // P2-6e item 3: stamp bridge on every run of this spawn path (skip when mixed statuses already set).
+    if (!mixedBridgeFallback) stampBridgeAll(bridgeStatus);
 
     const ad = ADAPTERS[member];
     let text = "";
@@ -365,7 +399,7 @@ export function createDispatcher(opts = {}) {
     // Resume failures already retried above and are not counted as run_failed for that attempt.
     const failReason = classifyRunFailure(result);
     if (failReason) {
-      patchRunCheckpoint(result?.runId, member, { bridge: bridgeStatus, fail: failReason });
+      stampBridgeAll(bridgeStatus, { fail: failReason });
       try { expireDeliveryLease(delivery.id, failReason, member); } catch { /* store may be closed after hardStop */ }
       try {
         if (isCeilingOrAuth(failReason)) setPresence(member, "blocked", failReason);
@@ -473,10 +507,25 @@ export function createDispatcher(opts = {}) {
         idempotency_key: `disp:${member}:${message.id}:respond:${gen}`,
       });
       if (nextState && sent?.message?.id) chainByMessage.set(sent.message.id, nextState);
-      patchRunCheckpoint(result.runId, member, { bridge: bridgeStatus });
     }
 
     setPresence(member, "idle");
+  }
+
+  /** P2-6e: record presence invited; create no message / delivery / model run. */
+  function summon(memberList, chamber_id = null) {
+    const invited = [];
+    for (const m of memberList || []) {
+      const id = String(m || "").toLowerCase();
+      if (!id) continue;
+      setPresence(id, "invited");
+      invited.push(id);
+    }
+    const committed = store.commit("member_invited", "owner", (api) => {
+      api.setRef("members", invited[0] || null, { invited, chamber_id });
+      return { invited, chamber_id, runs: 0 };
+    });
+    return committed.result;
   }
 
   function ownerSay(envelope) {
@@ -551,6 +600,7 @@ export function createDispatcher(opts = {}) {
     active,
     home,
     ownerSay,
+    summon,
     parseAddressChain,
     chainByMessage,
   };

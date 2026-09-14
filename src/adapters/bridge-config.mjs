@@ -13,8 +13,8 @@ export function noneBridge() {
 }
 
 export function prepareBridge(member, { cwd, token, apiBase, disabled = false }) {
-  if (disabled || member === "codex") {
-    // Codex: bridge disabled until approval-key question is answered (P2-6d).
+  if (disabled || member === "codex" || member === "grok") {
+    // P2-6d/e: Codex + Grok bridge off by default (plain text). Bridge cert is Phase 3.
     return noneBridge();
   }
 

@@ -1,5 +1,5 @@
-// scripts/live-proof.mjs -- P2-6d official live runner (attempt 3).
-// Run ONCE with COUNCIL_LIVE=1. Hard cap 6 Codex+Grok runs. Do not re-run without Claude.
+// scripts/live-proof.mjs -- P2-6e live runner (attempt 4 HOLD until GO).
+// Run ONCE with COUNCIL_LIVE=1 after Adam/Claude GO. Hard cap 6 Codex+Grok runs (summons spend 0).
 // Always mints a fresh home under %LOCALAPPDATA%\\ObsidianCouncil\\live-<stamp>\\; ignores inherited COUNCIL_HOME.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -81,14 +81,8 @@ const chamber = await (async () => {
 })();
 
 note("chamber " + chamber);
-d.outbox.send({
-  sender: "owner",
-  recipients: ["codex", "grok"],
-  chamber_id: chamber,
-  kind: "summon",
-  content: "You are summoned.",
-  idempotency_key: "live-summon",
-});
+// P2-6e: summons record presence invited only — no message, no model run.
+d.summon(["codex", "grok"], chamber);
 
 d.ownerSay({
   chamber_id: chamber,
@@ -195,7 +189,7 @@ if (modelRuns.length > MAX) {
 
 const verdict = failed.length === 0 ? "PASS" : "FAIL";
 
-const md = `# Phase 2 live proof (P2-6d attempt 3)
+const md = `# Phase 2 live proof (P2-6e attempt 4)
 
 - At: ${new Date().toISOString()} (UTC)
 - Home: \`${home}\`

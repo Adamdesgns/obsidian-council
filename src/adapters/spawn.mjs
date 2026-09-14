@@ -240,24 +240,39 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
     refused: result.refused || null,
     role,
     buildPolicy: result.buildPolicy || null,
-    // P2-6d: redacted heads so failures are diagnosable from the run row
+    // P2-6d/e: redacted heads so failures are diagnosable from the run row
     stdout_head: String(result.stdout || "").slice(0, HEAD),
     stderr_head: String(result.stderr || "").slice(0, HEAD),
   };
   store.commit("run_finished", member, (api) => {
-    api.prepare(
-      `UPDATE runs SET ended=?, exit=?, checkpoint=? WHERE id=? AND ended IS NULL`
-    ).run(
-      ended,
-      result.exit,
-      JSON.stringify(checkpoint),
-      runId
-    );
-    api.setRef("runs", runId, {
-      exit: result.exit,
-      timedOut: result.timedOut,
-      refused: !!result.refused,
-    });
+    const row = api.prepare("SELECT ended, exit, checkpoint FROM runs WHERE id = ?").get(runId);
+    if (row && row.ended != null) {
+      // P2-6e: fenced mid-run — still store redacted heads; keep fenced exit.
+      let cp = {};
+      try { cp = JSON.parse(row.checkpoint || "{}"); } catch { /* */ }
+      Object.assign(cp, checkpoint);
+      api.prepare("UPDATE runs SET checkpoint = ? WHERE id = ?").run(JSON.stringify(cp), runId);
+      api.setRef("runs", runId, {
+        exit: row.exit,
+        timedOut: result.timedOut,
+        refused: !!result.refused,
+        heads_after_fence: true,
+      });
+    } else {
+      api.prepare(
+        `UPDATE runs SET ended=?, exit=?, checkpoint=? WHERE id=? AND ended IS NULL`
+      ).run(
+        ended,
+        result.exit,
+        JSON.stringify(checkpoint),
+        runId
+      );
+      api.setRef("runs", runId, {
+        exit: result.exit,
+        timedOut: result.timedOut,
+        refused: !!result.refused,
+      });
+    }
   });
 
   return { ...result, runId, argv: shown, role };

@@ -321,15 +321,15 @@ export function createApi(opts = {}) {
       const body = await readBody(req);
       const members = body.members || body.member && [body.member] || [];
       const chamber_id = body.chamber_id;
-      const r = outbox.send({
-        sender: "owner",
-        recipients: members,
-        chamber_id,
-        kind: "summon",
-        content: body.content || "You are summoned to the Floor.",
-        idempotency_key: body.idempotency_key || `summon:${chamber_id}:${members.join(",")}:${Date.now()}`,
+      // P2-6e: summons record presence invited only — no message, no delivery, no model run.
+      const committed = store.commit("member_invited", "owner", (api) => {
+        api.setRef("members", members[0] || null, { invited: members, chamber_id });
+        return { invited: members, chamber_id, runs: 0 };
       });
-      return sendJson(res, 200, r);
+      if (typeof opts.onSummon === "function") {
+        try { opts.onSummon(members, chamber_id); } catch { /* */ }
+      }
+      return sendJson(res, 200, committed.result);
     }
 
     if (req.method === "POST" && path === "/owner/say") {
