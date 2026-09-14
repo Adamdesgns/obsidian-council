@@ -150,7 +150,7 @@ document.getElementById("send").onclick = async () => {
   chamberId = document.getElementById("chamberSelect").value || chamberId;
   await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, recipients: at.length ? at : ["codex","grok"] } });
   document.getElementById("say").value = "";
-  line("you: " + content);
+  pollMessages();
 };
 document.getElementById("haltToggle").onclick = async () => {
   const st = await api("/owner/state");
@@ -175,14 +175,35 @@ function connectFloor() {
   if (!chamberId || !token()) return;
   es = new EventSource(apiBase + "/owner/floor/" + chamberId); // EventSource cannot set Authorization — use fetch stream in a later polish; for now poll
 }
-// SSE with bearer: poll events via state for Phase 2
+// Poll the chamber's messages; render every reply from every seat.
+let lastSeen = "";
+const seen = new Set();
+async function pollMessages() {
+  if (!token()) return;
+  const cid = document.getElementById("chamberSelect").value || chamberId;
+  if (!cid) return;
+  if (cid !== chamberId) { chamberId = cid; lastSeen = ""; seen.clear(); logEl.textContent = ""; }
+  try {
+    const r = await api("/owner/messages?chamber_id=" + encodeURIComponent(cid) + "&after=" + encodeURIComponent(lastSeen));
+    for (const m of r.messages || []) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      lastSeen = m.created;
+      const who = m.sender === "owner" ? "you" : m.sender;
+      const t = m.created.slice(11, 19) + "Z";
+      line(`[${t}] ${who} (${m.kind}):\n${m.content}\n`);
+    }
+  } catch (e) { line("messages error: " + e.message); }
+}
 setInterval(async () => {
   if (!token()) return;
   try {
     const st = await api("/owner/state");
     document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
   } catch {}
-}, 4000);
+  await pollMessages();
+}, 3000);
+document.getElementById("chamberSelect").addEventListener("change", pollMessages);
 
 refresh();
 line("Floor ready. Paste owner token, create a chamber, summon, say.");

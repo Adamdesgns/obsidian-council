@@ -407,6 +407,21 @@ export function createApi(opts = {}) {
       return;
     }
 
+    if (req.method === "GET" && path === "/owner/messages") {
+      const chamberId = url.searchParams.get("chamber_id");
+      const after = url.searchParams.get("after") || "";
+      const rows = chamberId
+        ? store.prepare(
+            `SELECT id, kind, sender, content, created FROM messages
+             WHERE chamber_id = ? AND created > ? ORDER BY created ASC LIMIT 200`
+          ).all(chamberId, after)
+        : store.prepare(
+            `SELECT id, kind, sender, content, chamber_id, created FROM messages
+             WHERE created > ? ORDER BY created ASC LIMIT 200`
+          ).all(after);
+      return sendJson(res, 200, { messages: rows });
+    }
+
     if (req.method === "GET" && path === "/owner/state") {
       return sendJson(res, 200, {
         halt: existsSync(join(home, "HALT")),
