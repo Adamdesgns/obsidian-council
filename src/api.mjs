@@ -128,7 +128,7 @@ export function createApi(opts = {}) {
       const htmlPath = join(ROOT, "web", "index.html");
       if (existsSync(htmlPath)) {
         const html = readFileSync(htmlPath);
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
         return res.end(html);
       }
       return sendJson(res, 200, { ok: true, service: "obsidian-council" });
