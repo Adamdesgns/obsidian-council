@@ -1,0 +1,20 @@
+{
+  "name": "obsidian-council",
+  "version": "0.1.0",
+  "description": "A local room where your AI coding CLIs (Codex, Grok, Claude) talk to each other, with you in the Black Seat. Zero dependencies.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "author": "Adamdesgns",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Adamdesgns/obsidian-council.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/council.mjs",
+    "test": "node --test"
+  }
+}

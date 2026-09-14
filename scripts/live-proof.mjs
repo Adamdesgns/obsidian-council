@@ -189,7 +189,7 @@ if (modelRuns.length > MAX) {
 
 const verdict = failed.length === 0 ? "PASS" : "FAIL";
 
-const md = `# Phase 2 live proof (P2-6e attempt 4)
+const md = `# Phase 2 live proof (live-proof.mjs)
 
 - At: ${new Date().toISOString()} (UTC)
 - Home: \`${home}\`

@@ -1,4 +1,4 @@
-# Phase 2 live proof (P2-6e attempt 4)
+# Phase 2 live proof (attempt 5)
 
 - At: 2026-09-14T11:47:34.343Z (UTC)
 - Home: `C:\Users\steam\AppData\Local\ObsidianCouncil\live-20260914-064630`

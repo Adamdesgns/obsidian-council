@@ -79,6 +79,14 @@ let es = null;
 function token() { return document.getElementById("ownerToken").value.trim() || localStorage.getItem("council.ownerToken") || ""; }
 function saveToken() { localStorage.setItem("council.ownerToken", token()); }
 document.getElementById("ownerToken").addEventListener("change", saveToken);
+// First run: `npm start` prints one link like http://127.0.0.1:4777/#owner=<token>.
+// Take the token out of the URL, remember it in this browser only, then scrub the address bar.
+(function adoptLinkToken() {
+  const m = location.hash.match(/#owner=([0-9a-f]{64})/);
+  if (!m) return;
+  localStorage.setItem("council.ownerToken", m[1]);
+  history.replaceState(null, "", location.pathname);
+})();
 document.getElementById("ownerToken").value = localStorage.getItem("council.ownerToken") || "";
 
 async function api(path, opts = {}) {
@@ -98,6 +106,8 @@ async function refresh() {
     const st = await api("/owner/state");
     document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
     document.getElementById("haltPill").className = "pill " + (st.halt ? "halt" : "ok");
+    document.getElementById("haltToggle").textContent = st.halt ? "Clear HALT (let members run)" : "HALT (stop all members)";
+    document.getElementById("haltToggle").className = st.halt ? "" : "danger";
     const ul = document.getElementById("chamberList");
     ul.innerHTML = "";
     const sel = document.getElementById("chamberSelect");
