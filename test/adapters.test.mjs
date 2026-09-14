@@ -11,7 +11,7 @@ import * as grok from "../src/adapters/grok.mjs";
 import * as codex from "../src/adapters/codex.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const FAKE = join(ROOT, "test", "fake-member.mjs");
+const FAKE = join(ROOT, "src", "testutil", "fake-member.mjs");
 
 function tempHome() {
   return mkdtempSync(join(tmpdir(), "council-p2-adapt-"));

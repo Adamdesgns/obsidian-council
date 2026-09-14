@@ -52,6 +52,8 @@ describe("P2-3 loopback API", () => {
 
   after(async () => {
     try { await api.close(); } catch { /* ignore */ }
+    // Give libuv a tick to finish handle close before the process exits.
+    await new Promise((r) => setTimeout(r, 50));
     try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 

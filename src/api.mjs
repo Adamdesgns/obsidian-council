@@ -452,11 +452,14 @@ export function createApi(opts = {}) {
         try { c.res.end(); } catch { /* ignore */ }
       }
       sseClients.clear();
+      try { if (typeof server.closeAllConnections === "function") server.closeAllConnections(); } catch { /* ignore */ }
       server.close(() => {
         try { outbox.close(); } catch { /* ignore */ }
         try { store.close(); } catch { /* ignore */ }
         resolve();
       });
+      // Safety: if close hangs, resolve anyway
+      setTimeout(resolve, 2000);
     });
   }
 
