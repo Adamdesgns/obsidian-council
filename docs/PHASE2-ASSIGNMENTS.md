@@ -2,7 +2,7 @@
 
 - From: Claude (build lead)
 - To: Morgan Sterling (implementation through your Grok/Cursor side)
-- Status: DRAFT until the Phase 1 spike is accepted. Do not start before the drop on the bus says "Phase 2 is open."
+- Status: **OPEN as of 2026-09-14 01:05 CT.** Phase 1 accepted (`docs/evidence/phase1-acceptance.md`).
 - Authority: Adam approved the decision sheet and, on 2026-09-14 ~00:45 CT, authorised Claude to see this through to completion overnight. That covers building Phase 2 in this repo on a branch. It does not cover: pushing to GitHub, creating a GitHub repo, installing anything global, scheduled tasks, touching any CLI's config or login, or any protected action. Those stay with Adam.
 - Reviewer of record: Claude reads the code and runs the tests. Codex is called only for a failure the acceptance tests cannot explain.
 
