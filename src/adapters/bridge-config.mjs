@@ -1,5 +1,5 @@
-// src/adapters/bridge-config.mjs — per-run MCP bridge wiring (temp files; token not logged)
-import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+// src/adapters/bridge-config.mjs -- per-run MCP bridge wiring (temp files; token not logged)
+import { writeFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -7,10 +7,26 @@ import { dirname } from "node:path";
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const BRIDGE = join(ROOT, "src", "mcp-bridge.mjs");
 
-export function prepareBridge(member, { cwd, token, apiBase }) {
+/** No-op bridge (Codex until approval-key answered; Grok fallback). */
+export function noneBridge() {
+  return { bridge: "none", extraArgs: [], env: {}, cleanup() {} };
+}
+
+export function prepareBridge(member, { cwd, token, apiBase, disabled = false }) {
+  if (disabled || member === "codex") {
+    // Codex: bridge disabled until approval-key question is answered (P2-6d).
+    return noneBridge();
+  }
+
   const dir = join(cwd, ".council-bridge");
   mkdirSync(dir, { recursive: true });
-  const result = { bridge: "none", dir, cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ } } };
+  const result = {
+    bridge: "none",
+    dir,
+    cleanup() {
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
+    },
+  };
 
   if (!token) return result;
 
@@ -27,20 +43,7 @@ export function prepareBridge(member, { cwd, token, apiBase }) {
     }, null, 2), "utf8");
     result.bridge = "claude-mcp-config";
     result.extraArgs = ["--mcp-config", cfg];
-    result.logPath = cfg; // path only
-    return result;
-  }
-
-  if (member === "codex") {
-    // Best-effort -c flags; verify at runtime. Token in env overlay, not argv string logged.
-    result.bridge = "codex-c-flags";
-    result.extraArgs = [
-      "-c", `mcp_servers.council.command=${JSON.stringify(process.execPath)}`,
-      "-c", `mcp_servers.council.args=${JSON.stringify([BRIDGE])}`,
-      "-c", `mcp_servers.council.env={COUNCIL_MEMBER_TOKEN=${JSON.stringify(token)}}`,
-    ];
-    result.env = { COUNCIL_MEMBER_TOKEN: token, COUNCIL_API_BASE: apiBase || "" };
-    result.logPath = "codex:-c mcp_servers.council.*";
+    result.logPath = cfg;
     return result;
   }
 
@@ -61,8 +64,21 @@ export function prepareBridge(member, { cwd, token, apiBase }) {
     result.bridge = "grok-project-config";
     result.env = { COUNCIL_MEMBER_TOKEN: token, COUNCIL_API_BASE: apiBase || "" };
     result.logPath = toml;
+    result.grokToml = toml;
+    const baseCleanup = result.cleanup;
+    result.cleanup = () => {
+      baseCleanup();
+      try { unlinkSync(toml); } catch { /* */ }
+    };
     return result;
   }
 
   return result;
+}
+
+/** Remove project-scoped Grok MCP config so a retry runs without the bridge. */
+export function removeGrokBridgeConfig(cwd) {
+  const toml = join(cwd, ".grok", "config.toml");
+  try { unlinkSync(toml); } catch { /* */ }
+  return toml;
 }

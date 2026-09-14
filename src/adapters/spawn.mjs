@@ -234,11 +234,15 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   }
 
   const ended = new Date().toISOString();
+  const HEAD = 2048;
   const checkpoint = {
     timedOut: result.timedOut,
     refused: result.refused || null,
     role,
     buildPolicy: result.buildPolicy || null,
+    // P2-6d: redacted heads so failures are diagnosable from the run row
+    stdout_head: String(result.stdout || "").slice(0, HEAD),
+    stderr_head: String(result.stderr || "").slice(0, HEAD),
   };
   store.commit("run_finished", member, (api) => {
     api.prepare(

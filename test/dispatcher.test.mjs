@@ -382,4 +382,125 @@ describe("P2-6 dispatcher", () => {
     }
   });
 
+
+  it("(g) resume failure via stderr/not-found -> session_replaced, not run_failed", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const limits = {
+      daily_ceiling: { codex: 100 },
+      timeout_ms: { codex: 3000 },
+      dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+    };
+    // seed dead session id
+    let d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex"],
+      tickMs: 40,
+      timeoutMs: 3000,
+      limits,
+    });
+    try {
+      d.store.commit("session_seed", "system", (api) => {
+        api.prepare(
+          `INSERT INTO sessions(member, chamber_id, provider_session_id, lease_gen, resume_kind, updated)
+           VALUES(?,?,?,?,?,?)`
+        ).run("codex", "c-resume-nf", "dead-session-xyz", 0, "created", api.nowIso());
+        api.setRef("sessions", "codex", { seeded: true });
+      });
+      await d.close();
+
+      d = createDispatcher({
+        home,
+        useFake: true,
+        members: ["codex"],
+        tickMs: 40,
+        timeoutMs: 3000,
+        refuseResumeOnce: true,
+        refuseResumeEnv: { FAKE_MODE: "resume-not-found" },
+        retryEnv: { FAKE_MODE: "echo" },
+        defaultRespond: true,
+        limits,
+      });
+      d.outbox.send({
+        sender: "owner",
+        recipient: "codex",
+        chamber_id: "c-resume-nf",
+        kind: "say",
+        content: "please resume dead session",
+        idempotency_key: "resume-nf-1",
+      });
+      d.start();
+      let replaced = false;
+      let answered = null;
+      for (let i = 0; i < 50; i++) {
+        const ev = d.store.getEvents().filter((e) => e.kind === "session_replaced");
+        if (ev.length) replaced = true;
+        answered = d.store.prepare(
+          `SELECT d.* FROM deliveries d JOIN messages m ON m.id=d.message_id
+           WHERE m.idempotency_key='resume-nf-1' AND d.status='answered'`
+        ).get();
+        if (replaced && answered) break;
+        await sleep(50);
+      }
+      d.stop();
+      assert.equal(replaced, true, "expected session_replaced");
+      assert.ok(answered, "expected answered after resume retry");
+      const failed = d.store.getEvents().filter((e) => e.kind === "run_failed");
+      assert.equal(failed.length, 0, "resume failure must not count as run_failed, got " + failed.length);
+    } finally {
+      try { await d.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+  it("(h) run checkpoint stores redacted stdout/stderr heads (<=2KB)", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex"],
+      tickMs: 40,
+      timeoutMs: 3000,
+      defaultRespond: true,
+      env: { FAKE_PLANT_SECRET: "sk-testSECRETVALUE999abcdef", FAKE_MODE: "secret" },
+      limits: {
+        daily_ceiling: { codex: 100 },
+        timeout_ms: { codex: 3000 },
+        dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+      },
+    });
+    try {
+      d.outbox.send({
+        sender: "owner",
+        recipient: "codex",
+        chamber_id: "cp-head",
+        kind: "say",
+        content: "checkpoint heads please",
+        idempotency_key: "cp-head-1",
+      });
+      d.start();
+      let run = null;
+      for (let i = 0; i < 40; i++) {
+        run = d.store.prepare("SELECT * FROM runs WHERE ended IS NOT NULL ORDER BY started DESC LIMIT 1").get();
+        if (run) break;
+        await sleep(50);
+      }
+      d.stop();
+      assert.ok(run, "expected a finished run");
+      const cp = JSON.parse(run.checkpoint || "{}");
+      assert.ok(typeof cp.stdout_head === "string", "stdout_head missing");
+      assert.ok(typeof cp.stderr_head === "string", "stderr_head missing");
+      assert.ok(Buffer.byteLength(cp.stdout_head, "utf8") <= 2048, "stdout_head too large");
+      assert.ok(Buffer.byteLength(cp.stderr_head, "utf8") <= 2048, "stderr_head too large");
+      assert.ok(!/sk-testSECRETVALUE999/.test(cp.stdout_head), "secret must be redacted in stdout_head");
+      assert.ok(cp.bridge === "none" || typeof cp.bridge === "string", "bridge status should be recorded");
+    } finally {
+      await d.close();
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+
 });

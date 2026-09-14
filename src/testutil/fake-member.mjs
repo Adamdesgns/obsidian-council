@@ -32,6 +32,18 @@ if (mode === "refuse-resume") {
   process.exit(1);
 }
 
+if (mode === "resume-not-found") {
+  // Mimic Grok dead-session stderr (P2-6d item 2)
+  console.error("Session old-session not found locally, restoring from remote... Error: Failed");
+  process.exit(1);
+}
+
+if (mode === "fail-nonzero") {
+  console.error("bridge boom: Error: Failed while loading mcp");
+  console.log(JSON.stringify({ type: "error", message: "fail-nonzero" }));
+  process.exit(1);
+}
+
 const out = {
   type: "result",
   result: mode === "secret"

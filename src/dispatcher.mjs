@@ -7,7 +7,7 @@ import { councilHome, ensureHome } from "./home.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
 import { spawnMember, killTree as killTreeSync } from "./adapters/spawn.mjs";
 import { buildPacket } from "./adapters/packet.mjs";
-import { prepareBridge } from "./adapters/bridge-config.mjs";
+import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/bridge-config.mjs";
 import * as claudeAd from "./adapters/claude.mjs";
 import * as codexAd from "./adapters/codex.mjs";
 import * as grokAd from "./adapters/grok.mjs";
@@ -95,6 +95,32 @@ export function createDispatcher(opts = {}) {
     if (result.exit === null || typeof result.exit === "undefined") return "spawn_error";
     if (result.exit !== 0) return `exit_${result.exit}`;
     return null;
+  }
+
+  /** P2-6d: resume id + (non-zero exit OR stderr/stdout resume-error pattern). */
+  function isResumeFailure(result, resumeId, refuseOnce) {
+    if (!resumeId) return false;
+    if (refuseOnce) return true;
+    if (result && result.exit !== 0 && result.exit != null) return true;
+    const err = String(result?.stderr || "");
+    const out = String(result?.stdout || "");
+    const re = /not found|already in use|Error: Failed|cannot resume|refuse_resume/i;
+    if (re.test(err) || re.test(out)) return true;
+    return false;
+  }
+
+  function patchRunCheckpoint(runId, member, patch) {
+    if (!runId) return;
+    try {
+      store.commit("run_checkpoint", member || "dispatcher", (api) => {
+        const row = api.prepare("SELECT checkpoint FROM runs WHERE id = ?").get(runId);
+        let cp = {};
+        try { cp = JSON.parse(row?.checkpoint || "{}"); } catch { /* */ }
+        Object.assign(cp, patch);
+        api.prepare("UPDATE runs SET checkpoint = ? WHERE id = ?").run(JSON.stringify(cp), runId);
+        api.setRef("runs", runId, patch);
+      });
+    } catch { /* store may be closed */ }
   }
 
   function isCeilingOrAuth(reason) {
@@ -218,20 +244,24 @@ export function createDispatcher(opts = {}) {
     let resume = session?.provider_session_id || null;
     let resumeFailed = false;
 
-    const packet = buildPacket({
-      member,
-      chamber,
-      message: {
-        id: message.id,
-        kind: message.kind,
-        sender: message.sender,
-        content: message.content,
-      },
-    });
+    const msgPayload = {
+      id: message.id,
+      kind: message.kind,
+      sender: message.sender,
+      content: message.content,
+    };
+    // P2-6d: Codex always plain-text / bridge=none until approval-key is answered.
+    const plainText = member === "codex" || !!opts.disableBridge;
+    let packet = buildPacket({ member, chamber, message: msgPayload, plainText });
 
     const cwd = join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
     mkdirSync(cwd, { recursive: true });
-    const bridge = prepareBridge(member, { cwd, token: tokens[member], apiBase });
+    let bridge = prepareBridge(member, {
+      cwd,
+      token: tokens[member],
+      apiBase,
+      disabled: !!opts.disableBridge || member === "codex",
+    });
     const spawnOpts = {
       chamber_id: chamber === "_" ? null : chamber,
       message_id: message.id,
@@ -249,7 +279,7 @@ export function createDispatcher(opts = {}) {
       extraArgs: bridge.extraArgs || [],
     };
 
-    // Test injection via opts only (no FAKE_MODE symbol in dispatcher).
+    // Test injection via opts only (no FAKE_MODE knowledge in dispatcher).
     if (opts.useFake || opts.fakePath) {
       spawnOpts.fakePath = opts.fakePath || FAKE;
     }
@@ -266,7 +296,9 @@ export function createDispatcher(opts = {}) {
 
     let bridgeStatus = bridge.bridge;
     try { bridge.cleanup(); } catch { /* */ }
-    if ((opts.refuseResumeOnce && resume) || /cannot resume|refuse_resume/i.test((result.stdout || "") + (result.stderr || ""))) {
+
+    // P2-6d item 2: resume failure -> session_replaced -> retry once without resume (not run_failed).
+    if (isResumeFailure(result, resume, opts.refuseResumeOnce && resume)) {
       resumeFailed = true;
       store.commit("session_replaced", member, (api) => {
         api.prepare(
@@ -284,9 +316,34 @@ export function createDispatcher(opts = {}) {
         ...spawnOpts,
         resume: null,
         persist: true,
-        env: { ...(opts.env || {}), ...(opts.retryEnv || {}) },
+        newId: member === "grok" ? crypto.randomUUID() : null,
+        env: { ...(opts.env || {}), ...(opts.retryEnv || {}), ...(bridge.env || {}) },
+        extraArgs: bridge.extraArgs || [],
       });
     }
+
+    // P2-6d item 5: Grok with project bridge exits non-zero (and not a resume failure) -> retry bridge=none.
+    if (
+      member === "grok" &&
+      bridgeStatus === "grok-project-config" &&
+      !resumeFailed &&
+      classifyRunFailure(result)
+    ) {
+      removeGrokBridgeConfig(cwd);
+      bridgeStatus = "none";
+      bridge = noneBridge();
+      packet = buildPacket({ member, chamber, message: msgPayload, plainText: true });
+      result = await spawnMember(store, member, packet, {
+        ...spawnOpts,
+        resume: null,
+        persist: true,
+        newId: crypto.randomUUID(),
+        env: { ...(opts.env || {}), ...(opts.retryEnv || {}) },
+        extraArgs: [],
+      });
+    }
+
+    patchRunCheckpoint(result?.runId, member, { bridge: bridgeStatus });
 
     const ad = ADAPTERS[member];
     let text = "";
@@ -304,9 +361,11 @@ export function createDispatcher(opts = {}) {
       outbound = opts.scriptedOutbound(member, message, result) || outbound;
     }
 
-    // No ack on a failed / cancelled / timed-out run — expire lease for reclaim.
+    // No ack on a failed / cancelled / timed-out run -- expire lease for reclaim.
+    // Resume failures already retried above and are not counted as run_failed for that attempt.
     const failReason = classifyRunFailure(result);
     if (failReason) {
+      patchRunCheckpoint(result?.runId, member, { bridge: bridgeStatus, fail: failReason });
       try { expireDeliveryLease(delivery.id, failReason, member); } catch { /* store may be closed after hardStop */ }
       try {
         if (isCeilingOrAuth(failReason)) setPresence(member, "blocked", failReason);
@@ -414,16 +473,7 @@ export function createDispatcher(opts = {}) {
         idempotency_key: `disp:${member}:${message.id}:respond:${gen}`,
       });
       if (nextState && sent?.message?.id) chainByMessage.set(sent.message.id, nextState);
-      if (result.runId) {
-        store.commit("run_bridge", member, (api) => {
-          const row = api.prepare("SELECT checkpoint FROM runs WHERE id = ?").get(result.runId);
-          let cp = {};
-          try { cp = JSON.parse(row?.checkpoint || "{}"); } catch { /* */ }
-          cp.bridge = typeof bridgeStatus !== "undefined" ? bridgeStatus : (bridge && bridge.bridge);
-          api.prepare("UPDATE runs SET checkpoint = ? WHERE id = ?").run(JSON.stringify(cp), result.runId);
-          api.setRef("runs", result.runId, { bridge: cp.bridge });
-        });
-      }
+      patchRunCheckpoint(result.runId, member, { bridge: bridgeStatus });
     }
 
     setPresence(member, "idle");

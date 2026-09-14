@@ -1,5 +1,6 @@
-// scripts/live-proof.mjs — P2-6c official live runner (attempt 2).
+// scripts/live-proof.mjs -- P2-6d official live runner (attempt 3).
 // Run ONCE with COUNCIL_LIVE=1. Hard cap 6 Codex+Grok runs. Do not re-run without Claude.
+// Always mints a fresh home under %LOCALAPPDATA%\\ObsidianCouncil\\live-<stamp>\\; ignores inherited COUNCIL_HOME.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,14 @@ const EVIDENCE = join(ROOT, "docs", "evidence", "phase2-live.md");
 const MAX = 6;
 const LINE = "@codex write a 5-line plan for a Node CLI that prints today's date in ISO format. @grok critique that plan in at most 5 numbered points. @codex revise the plan in 5 lines using the critique.";
 
-const home = join(process.env.LOCALAPPDATA, "ObsidianCouncil", "live-proof-" + Date.now()); // always fresh; ignore inherited COUNCIL_HOME
+// P2-6d item 1: always mint fresh home; ignore any inherited COUNCIL_HOME
+delete process.env.COUNCIL_HOME;
+const _stamp = (() => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+})();
+const home = join(process.env.LOCALAPPDATA, "ObsidianCouncil", "live-" + _stamp);
 mkdirSync(home, { recursive: true });
 process.env.COUNCIL_HOME = home;
 
@@ -187,7 +195,7 @@ if (modelRuns.length > MAX) {
 
 const verdict = failed.length === 0 ? "PASS" : "FAIL";
 
-const md = `# Phase 2 live proof (P2-6c attempt 2)
+const md = `# Phase 2 live proof (P2-6d attempt 3)
 
 - At: ${new Date().toISOString()} (UTC)
 - Home: \`${home}\`
