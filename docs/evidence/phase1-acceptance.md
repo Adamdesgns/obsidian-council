@@ -28,3 +28,4 @@
 |---|---|---|---|
 | P2-1 store and record | `732f117` | 3/3 | ACCEPTED 01:25 CT. One transaction per write, hash-chained events, transactional migrations, real two-process serialization test. |
 | P2-2 outbox and leases | `e9ef1a1` | 7/7 (incl. P2-1) | ACCEPTED 01:30 CT. Claim selects and conditionally updates on `attempt_gen` inside the store transaction; ack re-checks the generation in-transaction and records `stale_result_refused`. Nit for later: `ack` peeks the generation outside the transaction only to pick the event kind; harmless, since the in-transaction check governs. |
+| P2-3 loopback API | `d7dff89` | 11/11 | ACCEPTED 01:40 CT. Host and Origin must be loopback (403), bearer required (401), `/owner/*` refuses member tokens (403), body `sender` overwritten with a `sender_spoof_attempt` event. Owner/member tokens generated into the Council home, never printed. |
