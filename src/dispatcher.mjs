@@ -5,7 +5,7 @@ import { openStore } from "./store.mjs";
 import { createOutbox } from "./outbox.mjs";
 import { councilHome, ensureHome } from "./home.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
-import { spawnMember } from "./adapters/spawn.mjs";
+import { spawnMember, killTree as killTreeSync } from "./adapters/spawn.mjs";
 import { buildPacket } from "./adapters/packet.mjs";
 import { prepareBridge } from "./adapters/bridge-config.mjs";
 import * as claudeAd from "./adapters/claude.mjs";
@@ -59,6 +59,79 @@ export function createDispatcher(opts = {}) {
 
   function setPresence(member, state, reason = null) {
     presence[member] = { state, reason, at: new Date().toISOString() };
+  }
+
+  function parseJsonObjects(text) {
+    const objs = [];
+    const t = String(text || "").trim();
+    if (!t) return objs;
+    try {
+      const whole = JSON.parse(t);
+      return Array.isArray(whole) ? whole : [whole];
+    } catch { /* */ }
+    for (const line of t.split(/\r?\n/)) {
+      const l = line.trim();
+      if (!l.startsWith("{")) continue;
+      try { objs.push(JSON.parse(l)); } catch { /* */ }
+    }
+    return objs;
+  }
+
+  function isCancelledStop(result) {
+    for (const o of parseJsonObjects(result?.stdout)) {
+      if (o && o.stopReason === "cancelled") return true;
+    }
+    for (const o of parseJsonObjects(result?.stderr)) {
+      if (o && o.stopReason === "cancelled") return true;
+    }
+    return false;
+  }
+
+  function classifyRunFailure(result) {
+    if (!result) return "no_result";
+    if (result.refused) return String(result.refused);
+    if (result.timedOut) return "timed_out";
+    if (isCancelledStop(result)) return "cancelled";
+    if (result.exit === null || typeof result.exit === "undefined") return "spawn_error";
+    if (result.exit !== 0) return `exit_${result.exit}`;
+    return null;
+  }
+
+  function isCeilingOrAuth(reason) {
+    return /BUDGET|ceiling|auth|unauthorized|forbidden|401|403|token/i.test(String(reason || ""));
+  }
+
+  function fenceOpenRuns() {
+    store.commit("runs_fenced", "dispatcher", (api) => {
+      const open = api.prepare("SELECT id, member, message_id FROM runs WHERE ended IS NULL").all();
+      const now = api.nowIso();
+      const ids = [];
+      for (const run of open) {
+        api.prepare(
+          `UPDATE runs SET ended = ?, exit = ? WHERE id = ? AND ended IS NULL`
+        ).run(now, "interrupted", run.id);
+        if (run.message_id) {
+          api.prepare(
+            `UPDATE deliveries SET lease_until = ?, updated = ?
+             WHERE message_id = ? AND recipient = ? AND status = 'leased'`
+          ).run(now, now, run.message_id, run.member);
+        }
+        ids.push(run.id);
+      }
+      api.setRef("runs", ids[0] || null, { fenced: ids.length, ids });
+      return { fenced: ids.length, ids };
+    });
+  }
+
+  function expireDeliveryLease(deliveryId, reason, actor) {
+    store.commit("run_failed", actor || "dispatcher", (api) => {
+      const now = api.nowIso();
+      api.prepare(
+        `UPDATE deliveries SET lease_until = ?, updated = ? WHERE id = ?`
+      ).run(now, now, deliveryId);
+      api.setRef("deliveries", deliveryId, { run_failed: reason, lease_until: now });
+      return { deliveryId, reason };
+    });
   }
 
   function activeKey(member, chamber) {
@@ -231,8 +304,19 @@ export function createDispatcher(opts = {}) {
       outbound = opts.scriptedOutbound(member, message, result) || outbound;
     }
 
-    // Ack this delivery
-    const ack = outbox.ack(delivery, gen, { actor: member, status: "acked" });
+    // No ack on a failed / cancelled / timed-out run — expire lease for reclaim.
+    const failReason = classifyRunFailure(result);
+    if (failReason) {
+      try { expireDeliveryLease(delivery.id, failReason, member); } catch { /* store may be closed after hardStop */ }
+      try {
+        if (isCeilingOrAuth(failReason)) setPresence(member, "blocked", failReason);
+        else setPresence(member, "idle");
+      } catch { /* */ }
+      return;
+    }
+
+    // Ack this delivery as answered (success only)
+    const ack = outbox.ack(delivery, gen, { actor: member, status: "answered" });
     if (!ack.ok) {
       setPresence(member, "idle");
       return;
@@ -365,6 +449,7 @@ export function createDispatcher(opts = {}) {
 
   function start() {
     stopped = false;
+    fenceOpenRuns();
     if (timer) clearInterval(timer);
     timer = setInterval(() => {
       tick().catch((e) => console.error("[dispatcher]", e));
@@ -379,6 +464,19 @@ export function createDispatcher(opts = {}) {
     timer = null;
   }
 
+  /** Kill in-flight children and fence open runs without awaiting them (restart path). */
+  function hardStop() {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    for (const meta of active.values()) {
+      if (meta.child && meta.child.pid) {
+        try { killTreeSync(meta.child.pid); } catch { /* */ }
+      }
+    }
+    try { fenceOpenRuns(); } catch { /* */ }
+  }
+
   async function close() {
     stop();
     const pending = [...active.values()].map((m) => m.promise).filter(Boolean);
@@ -391,6 +489,8 @@ export function createDispatcher(opts = {}) {
   return {
     start,
     stop,
+    hardStop,
+    fenceOpenRuns,
     tick,
     close,
     store,

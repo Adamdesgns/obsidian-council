@@ -72,13 +72,13 @@ describe("P2-6 dispatcher", () => {
         },
       });
       d.start();
-      // Wait until delivery acked
+      // Wait until delivery answered
       let acked = false;
       for (let i = 0; i < 40; i++) {
         const row = d.store.prepare(
           `SELECT d.status FROM deliveries d JOIN messages m ON m.id=d.message_id WHERE m.idempotency_key='g1-msg'`
         ).get();
-        if (row?.status === "acked") { acked = true; break; }
+        if (row?.status === "answered" || row?.status === "acked") { acked = true; break; }
         await sleep(50);
       }
       assert.equal(acked, true);
@@ -292,6 +292,92 @@ describe("P2-6 dispatcher", () => {
       assert.ok(relays >= 1, "expected at least one relay hop, got " + relays);
     } finally {
       await d.close();
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+
+  it("(f) kill mid-run then restart: gen 2, one answered, interrupted marked", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const limits = {
+      daily_ceiling: { codex: 100 },
+      timeout_ms: { codex: 15000 },
+      dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+    };
+    let d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex"],
+      tickMs: 40,
+      timeoutMs: 15000,
+      leaseMs: 60_000,
+      env: { FAKE_DELAY_MS: "3000" },
+      defaultRespond: true,
+      limits,
+    });
+    try {
+      d.outbox.send({
+        sender: "owner",
+        recipient: "codex",
+        chamber_id: "kill1",
+        kind: "say",
+        content: "sleep then die",
+        idempotency_key: "kill-mid-1",
+      });
+      d.start();
+      // Wait until a run is in flight (ended IS NULL)
+      let openRun = null;
+      for (let i = 0; i < 50; i++) {
+        openRun = d.store.prepare("SELECT * FROM runs WHERE ended IS NULL").get();
+        if (openRun) break;
+        await sleep(40);
+      }
+      assert.ok(openRun, "expected an in-flight run");
+      // Kill dispatcher mid-run (fence + kill children)
+      d.hardStop();
+      // Let in-flight runOne settle (fail/no-ack) before closing the store
+      const pending = [...d.active.values()].map((m) => m.promise).filter(Boolean);
+      await Promise.allSettled(pending);
+      await sleep(50);
+      try { d.outbox.close(); } catch { /* */ }
+      try { d.store.close(); } catch { /* */ }
+
+      d = createDispatcher({
+        home,
+        useFake: true,
+        members: ["codex"],
+        tickMs: 40,
+        timeoutMs: 8000,
+        leaseMs: 60_000,
+        env: { FAKE_DELAY_MS: "0" },
+        defaultRespond: true,
+        limits,
+      });
+      d.start();
+      let answered = null;
+      for (let i = 0; i < 80; i++) {
+        answered = d.store.prepare(
+          `SELECT d.* FROM deliveries d JOIN messages m ON m.id=d.message_id
+           WHERE m.idempotency_key='kill-mid-1' AND d.status='answered'`
+        ).get();
+        if (answered) break;
+        await sleep(50);
+      }
+      assert.ok(answered, "expected answered delivery after restart");
+      assert.ok(answered.attempt_gen >= 2, "expected attempt_gen >= 2, got " + answered.attempt_gen);
+      const interrupted = d.store.prepare(
+        `SELECT COUNT(*) AS c FROM runs WHERE exit = 'interrupted'`
+      ).get().c;
+      assert.ok(interrupted >= 1, "expected interrupted run row");
+      const accepted = d.store.prepare(
+        `SELECT COUNT(*) AS c FROM messages WHERE chamber_id='kill1' AND sender='codex' AND kind IN ('respond','relay')`
+      ).get().c;
+      assert.equal(accepted, 1, "exactly one accepted result, got " + accepted);
+      const chain = d.store.verifyChain();
+      assert.equal(chain.ok, true, JSON.stringify(chain));
+    } finally {
+      try { await d.close(); } catch { /* */ }
       try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
     }
   });

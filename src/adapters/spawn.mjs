@@ -242,7 +242,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   };
   store.commit("run_finished", member, (api) => {
     api.prepare(
-      `UPDATE runs SET ended=?, exit=?, checkpoint=? WHERE id=?`
+      `UPDATE runs SET ended=?, exit=?, checkpoint=? WHERE id=? AND ended IS NULL`
     ).run(
       ended,
       result.exit,
