@@ -1,0 +1,7 @@
+{
+  "_comment": "Phase 1 spike ceiling approved by Adam 2026-09-14: at most 10 short headless model runs per CLI, zero API dollars. The scripts refuse to spawn a model run once the usage ledger shows this many for that CLI. Version checks (model:false) do not count.",
+  "claude": 10,
+  "codex": 10,
+  "grok": 10,
+  "api_dollars": 0
+}
