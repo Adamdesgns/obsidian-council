@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Obsidian Council — Floor</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:14px/1.4 system-ui,sans-serif; background:#0e0f12; color:#e8e8ea; }
+  header { padding:12px 16px; border-bottom:1px solid #2a2b31; }
+  main { display:grid; grid-template-columns:220px 1fr 260px; min-height:calc(100vh - 48px); }
+  aside, section { padding:12px; border-right:1px solid #2a2b31; }
+  #floor { display:flex; flex-direction:column; }
+  #log { flex:1; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:12px; }
+  #composer { display:flex; gap:8px; padding-top:8px; }
+  input, button { background:#1a1b21; color:#e8e8ea; border:1px solid #333; padding:8px; border-radius:6px; }
+  button { cursor:pointer; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:#9aa; margin:0 0 8px; }
+</style>
+</head>
+<body>
+<header><strong>Obsidian Council</strong> — Floor (Phase 2 stub; filled in P2-6)</header>
+<main>
+  <aside id="chambers"><h2>Chambers</h2><div id="chamber-list"></div></aside>
+  <section id="floor"><h2>Floor</h2><div id="log"></div>
+    <div id="composer"><input id="say" placeholder="@codex @grok …" style="flex:1"/><button id="send">Say</button></div>
+  </section>
+  <aside>
+    <h2>Black Seat</h2><div id="sanctions"></div>
+    <h2>Members</h2><div id="members"></div>
+    <h2>HALT</h2><button id="halt">Toggle HALT</button>
+  </aside>
+</main>
+<script>
+  // Wired in P2-6
+  document.getElementById("log").textContent = "Waiting for dispatcher…";
+</script>
+</body>
+</html>
