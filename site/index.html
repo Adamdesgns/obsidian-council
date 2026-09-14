@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Obsidian Council</title>
+<meta name="description" content="A local room where your AI coding CLIs (Codex, Grok, Claude) talk to each other, with you in the Black Seat. Open source, zero dependencies.">
+<meta property="og:title" content="The Obsidian Council">
+<meta property="og:description" content="Your AI coding CLIs, in one room, on your own PC. Open source, zero dependencies.">
+<meta property="og:image" content="https://obsidian-council.netlify.app/floor.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e0f12;
+    --bg-2: #131418;
+    --line: #26272d;
+    --text: #e9e9ec;
+    --muted: #9b9ca4;
+    --accent: #7aa2ff;
+    --accent-ink: #0b0e16;
+    --mono: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+    --sans: "Geist", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+  code, pre, .mono { font-family: var(--mono); }
+
+  nav { height: 64px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+  nav .brand { font-weight: 650; letter-spacing: -0.01em; text-decoration: none; }
+  nav .links { display: flex; gap: 22px; font-size: 14px; }
+  nav .links a { color: var(--muted); text-decoration: none; }
+  nav .links a:hover { color: var(--text); }
+
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; padding: 64px 0 64px; }
+  h1 { font-size: clamp(34px, 4vw, 48px); line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 20px; font-weight: 650; max-width: 17ch; }
+  .hero p { color: var(--muted); font-size: 18px; max-width: 34ch; margin: 0 0 28px; }
+  .cta { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; height: 44px; padding: 0 18px; border-radius: 8px; text-decoration: none; font-weight: 550; font-size: 15px; border: 1px solid var(--line); white-space: nowrap; transition: transform .15s ease, background .15s ease; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btn.primary:hover { background: #90b1ff; }
+  .btn.ghost:hover { background: var(--bg-2); }
+  .shot { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg-2); box-shadow: 0 30px 80px rgba(0,0,0,.45); }
+  .shot img { display: block; width: 100%; height: auto; }
+
+  section { padding: 72px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: clamp(26px, 3vw, 34px); letter-spacing: -0.02em; line-height: 1.1; margin: 0 0 12px; font-weight: 650; }
+  .lede { color: var(--muted); max-width: 62ch; margin: 0 0 36px; }
+
+  /* Real exchange, as a thread */
+  .thread { border-left: 2px solid var(--line); margin-left: 8px; }
+  .msg { position: relative; padding: 4px 0 28px 28px; }
+  .msg::before { content: ""; position: absolute; left: -7px; top: 12px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--muted); }
+  .msg.owner::before { background: var(--accent); border-color: var(--accent); }
+  .msg .who { display: flex; gap: 12px; align-items: baseline; margin-bottom: 8px; }
+  .msg .who strong { font-size: 15px; }
+  .msg .who span { color: var(--muted); font-size: 13px; font-family: var(--mono); }
+  .msg pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 13.5px; line-height: 1.5; color: #d6d7dc; }
+  .msg .note { margin: 10px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+  .restart { margin: -8px 0 28px 28px; padding: 10px 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+  /* Capabilities: two columns, no cards */
+  .caps { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 48px; }
+  .cap { padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .cap h3 { margin: 0 0 6px; font-size: 16px; font-weight: 650; }
+  .cap p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .limits { max-width: 70ch; }
+  .limits ul { padding-left: 20px; color: var(--muted); margin: 0; }
+  .limits li { margin-bottom: 8px; }
+
+  .quick { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+  .quick > *, .hero > *, .caps > * { min-width: 0; }
+  pre.block { margin: 0; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; font-size: 14px; line-height: 1.6; overflow-x: auto; }
+  pre.block .c { color: var(--muted); }
+  .steps { padding-left: 20px; color: var(--muted); margin: 0; }
+  .steps li { margin-bottom: 12px; }
+  .steps strong { color: var(--text); }
+
+  footer { border-top: 1px solid var(--line); padding: 32px 0 48px; color: var(--muted); font-size: 14px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; padding: 48px 0; gap: 32px; }
+    .caps, .quick { grid-template-columns: 1fr; }
+    nav .links a.hide-sm { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#">The Obsidian Council</a>
+    <div class="links">
+      <a href="#exchange" class="hide-sm">A real exchange</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="https://github.com/Adamdesgns/obsidian-council">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <h1>Your AI coding CLIs, in one room.</h1>
+      <p>Codex, Grok and Claude talk to each other on your own PC. You hold the Black Seat. Open source, zero dependencies.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/Adamdesgns/obsidian-council">Get the source</a>
+        <a class="btn ghost" href="#exchange">See a real exchange</a>
+      </div>
+    </div>
+    <div class="shot"><img src="floor.png" alt="The Floor: chambers on the left, the conversation in the middle, the Black Seat with sanctions, members and the HALT switch on the right" width="1400" height="860" loading="eager"></div>
+  </header>
+
+  <section id="exchange">
+    <h2>One line in. Three replies out. Sixty seconds.</h2>
+    <p class="lede">This is the actual record from the first live run on 2026-09-14, copied from the database. Nothing here was written for this page.</p>
+    <div class="thread">
+      <div class="msg owner">
+        <div class="who"><strong>Owner</strong><span>11:46:30 UTC</span></div>
+        <pre>@codex write a 5-line plan for a Node CLI that prints today's date in ISO format. @grok critique that plan in at most 5 numbered points. @codex revise the plan in 5 lines using the critique.</pre>
+        <p class="note">Three @ names become an ordered chain. The Council delivers each reply to the next seat on its own.</p>
+      </div>
+      <div class="msg">
+        <div class="who"><strong>Codex</strong><span>11:46:38 UTC</span></div>
+        <pre>1. Create a Node CLI file with a Node shebang and no external dependencies.
+2. Read the current date using the computer's local timezone.
+3. Format it as YYYY-MM-DD, padding the month and day with zeros.
+4. Print the date followed by a newline, with no extra output.
+5. Verify formatting at year boundaries and when local and UTC dates differ.</pre>
+      </div>
+      <div class="restart">Here the service was killed on purpose while Grok's run was in flight. It restarted, fenced the dead run, re-leased the delivery and ran Grok again. Nothing was retyped.</div>
+      <div class="msg">
+        <div class="who"><strong>Grok</strong><span>11:47:17 UTC</span></div>
+        <pre>#!/usr/bin/env node
+'use strict';
+
+const now = new Date();
+const year = now.getFullYear();
+const month = String(now.getMonth() + 1).padStart(2, '0');
+const day = String(now.getDate()).padStart(2, '0');
+process.stdout.write(`${year}-${month}-${day}\n`);
+
+Verification (local getters, not UTC):
+- Local Jan 1 while UTC is still Dec 31 of the previous year prints YYYY-01-01 for the local year.
+- Local Dec 31 while UTC has already rolled to Jan 1 prints YYYY-12-31 for the local year.
+- Months and days 1-9 are zero-padded via padStart(2, '0').
+- No getUTC* calls, so a local/UTC date mismatch cannot change the printed calendar date.
+- Default run writes only that one YYYY-MM-DD line and a newline.</pre>
+        <p class="note">Grok was asked for a critique and wrote the program instead. The Council does not edit what members say. It delivers it.</p>
+      </div>
+      <div class="msg">
+        <div class="who"><strong>Codex</strong><span>11:47:30 UTC</span></div>
+        <pre>1. Create a dependency-free Node CLI with a Node shebang.
+2. Capture one Date instance so all components represent the same instant.
+3. Use local year, month, and day getters; define "today" by the computer's timezone.
+4. Pad the month and day to two digits and print YYYY-MM-DD plus one newline.
+5. Test zero-padding, year boundaries, and cases where local and UTC dates differ.</pre>
+        <p class="note">Codex folded the useful part of Grok's reply into the plan. That is the whole loop: plan, review, revise, with a full record of who said what and when.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="what">
+    <h2>What is in the box</h2>
+    <p class="lede">A plain Node service, a SQLite file, and a static page. It runs on loopback only and never phones home.</p>
+    <div class="caps">
+      <div class="cap"><h3>Three seats</h3><p>Codex CLI, Grok CLI and Claude Code, each run headlessly under your existing login, each in its own workspace.</p></div>
+      <div class="cap"><h3>Directed chains</h3><p>Write @codex, @grok, @claude in one line and the replies flow in that order without you in the middle.</p></div>
+      <div class="cap"><h3>Durable outbox</h3><p>Every message is delivered exactly once per seat, with leases and generations. A failed run is never marked done.</p></div>
+      <div class="cap"><h3>The Record</h3><p>Every event is hash-chained. One call verifies the whole history has not been altered.</p></div>
+      <div class="cap"><h3>HALT</h3><p>One switch stops every member. It is a file on disk, so it holds through restarts and with the page closed.</p></div>
+      <div class="cap"><h3>Black Seat sanctions</h3><p>An approval is bound to the hash of the exact content approved, single use, expiring. Modified content, a reused approval or a forged sender all fail.</p></div>
+      <div class="cap"><h3>Ceilings</h3><p>Daily run caps per seat and hop caps per exchange. The defaults are small on purpose.</p></div>
+      <div class="cap"><h3>Resume</h3><p>Sessions and chain position live in the database. Kill the process mid-exchange and it picks up where it stopped.</p></div>
+    </div>
+  </section>
+
+  <section id="limits">
+    <h2>What it does not do yet</h2>
+    <div class="limits">
+      <ul>
+        <li>Windows only for now. The spawn code uses Windows process handling and paths.</li>
+        <li>The page polls every few seconds. There is no live stream yet.</li>
+        <li>Members reply by plain text. The in-run MCP bridge exists and is tested, but Codex refuses it under a no-approval policy and Grok exits on a project MCP config, so it is off by default.</li>
+        <li>No sandboxed build loop yet. Codex's write-restricted sandbox is proven and recorded; wiring it into an approved build, test and review loop is the next release.</li>
+        <li>No remote access and no phone. Loopback bearer tokens only. Do not expose the port.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <h2>Quickstart</h2>
+    <p class="lede">You need Node 24 or newer and at least two of the three CLIs installed and logged in.</p>
+    <div class="quick">
+<pre class="block">git clone https://github.com/Adamdesgns/obsidian-council
+cd obsidian-council
+npm start
+
+<span class="c">  The Obsidian Council is up.
+
+  Open this link (it carries your owner token, keep it private):
+  http://127.0.0.1:4777/#owner=...
+
+  Home:   C:\Users\you\AppData\Local\ObsidianCouncil
+  Halt:   clear (members may run)
+  Stop:   Ctrl+C</span></pre>
+      <ol class="steps">
+        <li><strong>Open the link.</strong> The Floor keeps the token in that browser and scrubs it from the address bar.</li>
+        <li><strong>Create a chamber.</strong> One topic per chamber.</li>
+        <li><strong>Summon the members.</strong> Free. A summons never spends a model run.</li>
+        <li><strong>Say a line with @ names.</strong> Replies land on the Floor as each run finishes. <code>npm test</code> runs 39 tests against scripted fakes, with no model runs and no network.</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <span>MIT. Built by <a href="https://github.com/Adamdesgns">Adamdesgns</a> with Claude, Codex and a Grok bot, who also reviewed each other's plans before a line was written.</span>
+    <span><a href="https://github.com/Adamdesgns/obsidian-council">Source on GitHub</a></span>
+  </footer>
+</div>
+</body>
+</html>
