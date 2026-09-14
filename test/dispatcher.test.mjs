@@ -151,7 +151,7 @@ describe("P2-6 dispatcher", () => {
       members: ["codex"],
       tickMs: 40,
       timeoutMs: 10_000,
-      fakeEnv: { FAKE_MODE: "hang", FAKE_DELAY_MS: "0" },
+      env: { FAKE_MODE: "hang", FAKE_DELAY_MS: "0" },
       limits: {
         daily_ceiling: { codex: 100 },
         timeout_ms: { codex: 10000 },
@@ -193,7 +193,7 @@ describe("P2-6 dispatcher", () => {
       members: ["codex"],
       tickMs: 40,
       timeoutMs: 3000,
-      fakeEnv: {},
+      env: {},
       limits: {
         daily_ceiling: { codex: 100 },
         timeout_ms: { codex: 3000 },
@@ -226,7 +226,9 @@ describe("P2-6 dispatcher", () => {
         members: ["codex"],
         tickMs: 40,
         timeoutMs: 3000,
-        fakeEnv: { FAKE_MODE: "refuse-resume" },
+        refuseResumeOnce: true,
+        refuseResumeEnv: { FAKE_MODE: "refuse-resume" },
+        retryEnv: { FAKE_MODE: "echo" },
         limits: {
           daily_ceiling: { codex: 100 },
           timeout_ms: { codex: 3000 },
@@ -249,4 +251,49 @@ describe("P2-6 dispatcher", () => {
       try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
     }
   });
+  it("(e) three-hop directed @chain terminates at owner", async () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home,
+      useFake: true,
+      members: ["codex", "grok"],
+      tickMs: 40,
+      timeoutMs: 3000,
+      defaultRespond: true,
+      limits: {
+        daily_ceiling: { codex: 100, grok: 100 },
+        timeout_ms: { codex: 3000, grok: 3000 },
+        dispatcher: { tick_ms: 40, max_member_hops: 4, max_auto_replies_per_owner_turn: 6 },
+      },
+    });
+    try {
+      d.ownerSay({
+        chamber_id: "chain",
+        content: "@codex draft one line. @grok critique one line. @codex revise one line.",
+        idempotency_key: "chain-3hop",
+      });
+      d.start();
+      let done = false;
+      for (let i = 0; i < 60; i++) {
+        const toOwner = d.store.prepare(
+          `SELECT COUNT(*) AS c FROM deliveries d
+           JOIN messages m ON m.id=d.message_id
+           WHERE d.recipient='owner' AND m.chamber_id='chain' AND m.kind IN ('respond','relay')`
+        ).get().c;
+        if (toOwner >= 1) { done = true; break; }
+        await sleep(50);
+      }
+      d.stop();
+      assert.equal(done, true, "expected final reply to owner");
+      const relays = d.store.prepare(
+        `SELECT COUNT(*) AS c FROM messages WHERE chamber_id='chain' AND kind='relay'`
+      ).get().c;
+      assert.ok(relays >= 1, "expected at least one relay hop, got " + relays);
+    } finally {
+      await d.close();
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
 });

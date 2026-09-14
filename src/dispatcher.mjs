@@ -7,6 +7,23 @@ import { councilHome, ensureHome } from "./home.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
 import { spawnMember } from "./adapters/spawn.mjs";
 import { buildPacket } from "./adapters/packet.mjs";
+import { prepareBridge } from "./adapters/bridge-config.mjs";
+import * as claudeAd from "./adapters/claude.mjs";
+import * as codexAd from "./adapters/codex.mjs";
+import * as grokAd from "./adapters/grok.mjs";
+
+const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
+
+export function parseAddressChain(text) {
+  const found = [];
+  const re = /@([a-zA-Z][\w-]*)/g;
+  let m;
+  while ((m = re.exec(String(text || "")))) {
+    const id = m[1].toLowerCase();
+    if (["codex", "grok", "claude", "owner"].includes(id)) found.push(id);
+  }
+  return found;
+}
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
@@ -23,6 +40,8 @@ export function createDispatcher(opts = {}) {
   const maxAuto = limits.dispatcher?.max_auto_replies_per_owner_turn ?? 4;
   const members = opts.members || ["codex", "grok"];
   const active = new Map(); // key member::chamber -> run promise
+  const chainByMessage = new Map();
+  const apiBase = opts.apiBase || process.env.COUNCIL_API_BASE || "";
   const presence = Object.fromEntries(members.map((m) => [m, { state: "idle", reason: null }]));
   const hopCount = new Map(); // chamber -> hops this owner turn
   const autoReplies = new Map();
@@ -137,6 +156,9 @@ export function createDispatcher(opts = {}) {
       },
     });
 
+    const cwd = join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
+    mkdirSync(cwd, { recursive: true });
+    const bridge = prepareBridge(member, { cwd, token: tokens[member], apiBase });
     const spawnOpts = {
       chamber_id: chamber === "_" ? null : chamber,
       message_id: message.id,
@@ -145,20 +167,21 @@ export function createDispatcher(opts = {}) {
       newId: member === "grok" && !resume ? crypto.randomUUID() : null,
       role: "review",
       memberToken: tokens[member],
-      cwd: join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_"),
+      cwd,
       timeoutMs: opts.timeoutMs,
       limits: opts.limits || limits,
       skipBuildVerify: true,
       onSpawn: (child) => { meta.child = child; },
-      env: { ...(opts.fakeEnv || {}) },
+      env: { ...(opts.env || {}), ...(bridge.env || {}) },
+      extraArgs: bridge.extraArgs || [],
     };
-    mkdirSync(spawnOpts.cwd, { recursive: true });
 
-    if (opts.useFake || process.env.COUNCIL_FAKE === "1") {
+    // Test injection via opts only (no FAKE_MODE symbol in dispatcher).
+    if (opts.useFake || opts.fakePath) {
       spawnOpts.fakePath = opts.fakePath || FAKE;
-      if (opts.fakeEnv?.FAKE_MODE === "refuse-resume" && resume) {
-        spawnOpts.env = { ...spawnOpts.env, FAKE_MODE: "refuse-resume" };
-      }
+    }
+    if (opts.refuseResumeOnce && resume && opts.refuseResumeEnv) {
+      spawnOpts.env = { ...spawnOpts.env, ...opts.refuseResumeEnv };
     }
 
     let result;
@@ -168,7 +191,9 @@ export function createDispatcher(opts = {}) {
       result = { refused: String(e), exit: null, stdout: "", stderr: String(e) };
     }
 
-    if (spawnOpts.env?.FAKE_MODE === "refuse-resume" || /cannot resume|refuse_resume/i.test(result.stdout + result.stderr)) {
+    let bridgeStatus = bridge.bridge;
+    try { bridge.cleanup(); } catch { /* */ }
+    if ((opts.refuseResumeOnce && resume) || /cannot resume|refuse_resume/i.test((result.stdout || "") + (result.stderr || ""))) {
       resumeFailed = true;
       store.commit("session_replaced", member, (api) => {
         api.prepare(
@@ -186,19 +211,22 @@ export function createDispatcher(opts = {}) {
         ...spawnOpts,
         resume: null,
         persist: true,
-        env: { ...(opts.fakeEnv || {}), FAKE_MODE: "echo" },
+        env: { ...(opts.env || {}), ...(opts.retryEnv || {}) },
       });
     }
 
-    // Parse outbound intents from fake/final JSON
+    const ad = ADAPTERS[member];
+    let text = "";
+    if (ad && ad.finalText) {
+      try { text = ad.finalText(result) || ""; } catch { text = ""; }
+    }
+    if (!text) text = String(result && result.stdout || "").trim().slice(0, 4000);
     let outbound = [];
     try {
       const objs = JSON.parse(result.stdout);
-      if (objs && objs.outbound) outbound = objs.outbound;
+      if (objs && Array.isArray(objs.outbound)) outbound = objs.outbound;
       if (objs && objs.ask) outbound.push({ kind: "ask", ...objs.ask });
-    } catch {
-      // prose / multi-line: look for council_submit style markers in fake
-    }
+    } catch { /* prose */ }
     if (opts.scriptedOutbound) {
       outbound = opts.scriptedOutbound(member, message, result) || outbound;
     }
@@ -256,23 +284,83 @@ export function createDispatcher(opts = {}) {
       });
     }
 
-    // Default: if no outbound, still send a respond to owner for Floor visibility
+    // Directed @chain: advance hop index (supports repeated @codex entries).
+    function resolveChainState(msg) {
+      const raw = chainByMessage.get(msg.id)
+        || (msg.parent_id && chainByMessage.get(msg.parent_id))
+        || null;
+      if (!raw) {
+        if (msg.sender === "owner") {
+          const c = parseAddressChain(msg.content);
+          if (c.length) return { chain: c, hop: 0 };
+        }
+        return null;
+      }
+      if (Array.isArray(raw)) return { chain: raw, hop: 0 };
+      return raw;
+    }
+    const chainState = resolveChainState(message);
+    let chainNext = null;
+    let nextState = null;
+    if (chainState && Array.isArray(chainState.chain)) {
+      const hop = Number(chainState.hop) || 0;
+      // Current member should be chain[hop]; advance to hop+1
+      if (hop < chainState.chain.length - 1) {
+        chainNext = chainState.chain[hop + 1];
+        nextState = { chain: chainState.chain, hop: hop + 1 };
+      } else {
+        nextState = { chain: chainState.chain, hop: hop }; // last — return to owner
+      }
+      chainByMessage.set(message.id, chainState);
+    }
+
     if (!outbound.length && opts.defaultRespond !== false) {
       if (message.sender !== "owner") {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
-      outbox.send({
+      const recipients = chainNext ? [chainNext] : ["owner"];
+      if (chainNext) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
+      const sent = outbox.send({
         sender: member,
-        recipients: ["owner"],
+        recipients,
         chamber_id: chamber === "_" ? null : chamber,
-        kind: "respond",
-        content: (result.stdout || "").slice(0, 2000) || "(empty)",
+        kind: chainNext ? "relay" : "respond",
+        content: (text || result.stdout || "").slice(0, 2000) || "(empty)",
         parent_id: message.id,
         idempotency_key: `disp:${member}:${message.id}:respond:${gen}`,
       });
+      if (nextState && sent?.message?.id) chainByMessage.set(sent.message.id, nextState);
+      if (result.runId) {
+        store.commit("run_bridge", member, (api) => {
+          const row = api.prepare("SELECT checkpoint FROM runs WHERE id = ?").get(result.runId);
+          let cp = {};
+          try { cp = JSON.parse(row?.checkpoint || "{}"); } catch { /* */ }
+          cp.bridge = typeof bridgeStatus !== "undefined" ? bridgeStatus : (bridge && bridge.bridge);
+          api.prepare("UPDATE runs SET checkpoint = ? WHERE id = ?").run(JSON.stringify(cp), result.runId);
+          api.setRef("runs", result.runId, { bridge: cp.bridge });
+        });
+      }
     }
 
     setPresence(member, "idle");
+  }
+
+  function ownerSay(envelope) {
+    const chain = parseAddressChain(envelope.content || "");
+    const first = chain[0] || (envelope.recipients || [])[0] || "codex";
+    const recipients = chain.length ? [first] : (envelope.recipients || [first]);
+    const sent = outbox.send({
+      ...envelope,
+      sender: "owner",
+      recipients,
+      kind: envelope.kind || "say",
+      idempotency_key: envelope.idempotency_key || ("owner-say:" + Date.now()),
+    });
+    if (chain.length && sent?.message?.id) {
+      chainByMessage.set(sent.message.id, { chain, hop: 0 });
+      store.commit("chain_set", "owner", (api) => api.setRef("messages", sent.message.id, { chain, hop: 0 }));
+    }
+    return sent;
   }
 
   function start() {
@@ -312,6 +400,9 @@ export function createDispatcher(opts = {}) {
     haltPath,
     active,
     home,
+    ownerSay,
+    parseAddressChain,
+    chainByMessage,
   };
 }
 

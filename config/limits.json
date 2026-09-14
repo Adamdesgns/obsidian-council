@@ -1,8 +1,8 @@
 {
   "daily_ceiling": {
-    "claude": 20,
-    "codex": 40,
-    "grok": 40
+    "claude": 10,
+    "codex": 15,
+    "grok": 15
   },
   "timeout_ms": {
     "claude": 240000,

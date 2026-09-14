@@ -154,7 +154,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
     return { refused: `cli not found: ${member}`, exit: null, stdout: "", stderr: "", timedOut: false, ms: 0 };
   }
 
-  const fullArgv = [...cli.prefix, ...argv];
+  const fullArgv = [...cli.prefix, ...argv, ...(opts.extraArgs || [])];
   const runId = randomUUID();
   const started = new Date().toISOString();
   const shown = redact(`${cli.exe} ${fullArgv.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`);
