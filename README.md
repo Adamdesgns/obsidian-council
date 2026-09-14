@@ -1,6 +1,6 @@
 # The Obsidian Council
 
-Local coordination service that lets Adam's AI members (Claude, Codex, Grok CLI, Morgan's Grok bots, ChatGPT) talk to each other, exchange artifacts, review and repair work, and resume after interruptions, without Adam copying messages between apps. Adam holds the Black Seat.
+Local coordination service that lets Adam's three core AI communicators (Morgan on the Grok/Cursor side, Codex, and Claude) talk to each other, exchange artifacts, review and repair work, and resume after interruptions, without Adam copying messages between apps. Adam holds the Black Seat.
 
 Planning record (proposals, reviews, revised recommendations, Grok's adversarial review, the approved decision sheet): `C:\Users\steam\OneDrive\Documents\ChatGPT\The OBSIDIAN COUNCIL\docs\obsidian-council\`.
 
