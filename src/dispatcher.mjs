@@ -11,19 +11,11 @@ import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/br
 import * as claudeAd from "./adapters/claude.mjs";
 import * as codexAd from "./adapters/codex.mjs";
 import * as grokAd from "./adapters/grok.mjs";
+import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
 
 const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
 
-export function parseAddressChain(text) {
-  const found = [];
-  const re = /@([a-zA-Z][\w-]*)/g;
-  let m;
-  while ((m = re.exec(String(text || "")))) {
-    const id = m[1].toLowerCase();
-    if (["codex", "grok", "claude", "owner"].includes(id)) found.push(id);
-  }
-  return found;
-}
+export { parseAddressChain };
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
@@ -198,9 +190,12 @@ export function createDispatcher(opts = {}) {
         const key = activeKey(member, chamber);
         if (active.has(key)) continue;
 
-        // hop / auto-reply caps
+        // hop / auto-reply caps. A hop is a member->member send; a delivery
+        // produced by hop <= maxHops may still be consumed (its reply returns
+        // to the owner), so a chain with exactly maxHops member hops completes.
+        // Initiating hops beyond the cap is blocked at send time in runOne.
         const hops = hopCount.get(chamber) || 0;
-        if (hops >= maxHops && row.sender !== "owner") {
+        if (hops > maxHops && row.sender !== "owner") {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "hop_cap", chamber });
           });
@@ -434,7 +429,17 @@ export function createDispatcher(opts = {}) {
     }
 
     for (const out of outbound) {
-      if (out.kind === "ask" || out.recipient) {
+      let recipients = out.recipients || (out.recipient ? [out.recipient] : ["owner"]);
+      const memberDirected = recipients.some((r) => r && r !== "owner");
+      // Hop cap at send time: at the cap, return to the floor instead of
+      // starting another member hop.
+      if (memberDirected && (hopCount.get(chamber) || 0) >= maxHops) {
+        store.commit("floor_returned", member, (api) => {
+          api.setRef("messages", message.id, { reason: "hop_cap", chamber, redirected: recipients });
+        });
+        recipients = ["owner"];
+      }
+      if (recipients.some((r) => r && r !== "owner")) {
         hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
         // checkpoint waiting if asking another member
         if (out.recipient && out.recipient !== "owner") {
@@ -451,7 +456,7 @@ export function createDispatcher(opts = {}) {
       }
       outbox.send({
         sender: member,
-        recipients: out.recipients || (out.recipient ? [out.recipient] : ["owner"]),
+        recipients,
         chamber_id: chamber === "_" ? null : chamber,
         kind: out.kind || "respond",
         content: out.content || result.stdout.slice(0, 2000),
@@ -500,6 +505,15 @@ export function createDispatcher(opts = {}) {
         advance = { root_id: chainState.rootId, hop: hop + 1 };
       }
     }
+    // Hop cap at send time: a further member relay would exceed the cap, so
+    // the chain is truncated and the reply returns to the owner.
+    if (chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
+      store.commit("floor_returned", member, (api) => {
+        api.setRef("messages", message.id, { reason: "hop_cap", chamber, truncated_next: chainNext });
+      });
+      chainNext = null;
+      advance = null;
+    }
 
     if (!outbound.length && opts.defaultRespond !== false) {
       if (message.sender !== "owner") {
@@ -538,21 +552,9 @@ export function createDispatcher(opts = {}) {
     return committed.result;
   }
 
+  // P2-6f contract lives in routing.mjs, shared with the HTTP API (POST /owner/say).
   function ownerSay(envelope) {
-    const chain = parseAddressChain(envelope.content || "");
-    const first = chain[0] || (envelope.recipients || [])[0] || "codex";
-    const recipients = chain.length ? [first] : (envelope.recipients || [first]);
-    // P2-6f: persist chain + hop=0 on the owner message in the same commit as send
-    const sent = outbox.send({
-      ...envelope,
-      sender: "owner",
-      recipients,
-      kind: envelope.kind || "say",
-      idempotency_key: envelope.idempotency_key || ("owner-say:" + Date.now()),
-      chain: chain.length ? chain : undefined,
-      chain_hop: chain.length ? 0 : undefined,
-    });
-    return sent;
+    return routeOwnerSay(outbox, envelope);
   }
 
   function start() {

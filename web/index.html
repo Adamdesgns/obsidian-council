@@ -146,9 +146,11 @@ document.getElementById("summon").onclick = async () => {
 };
 document.getElementById("send").onclick = async () => {
   const content = document.getElementById("say").value;
-  const at = [...content.matchAll(/@(\w+)/g)].map(m => m[1]);
   chamberId = document.getElementById("chamberSelect").value || chamberId;
-  await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, recipients: at.length ? at : ["codex","grok"] } });
+  // Routing (@chains, broadcast default) is the server's job — one parser, in
+  // src/routing.mjs. The idempotency key makes an accidental resend of this
+  // exact submission a no-op.
+  await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, idempotency_key: "floor:" + crypto.randomUUID() } });
   document.getElementById("say").value = "";
   pollMessages();
 };
