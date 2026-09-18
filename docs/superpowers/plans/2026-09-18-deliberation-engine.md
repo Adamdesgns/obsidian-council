@@ -278,14 +278,21 @@ const text = adapterForSeat(member).finalText(result);
 
 - [ ] **Step 5: Allow @fable in address chains**
 
-At `src/dispatcher.mjs:23`, `parseAddressChain` whitelists member names. Replace the hardcoded array with the seat list so `@fable` is not silently dropped:
+> **This step targets `src/routing.mjs`, which exists only after PR #1 is merged.** PR #1 collapses three separate `@mention` parsers into that one file. Do not start this plan until it has landed — patching the dispatcher's copy while the Floor still client-parses would make `@fable` work in tests and silently bypass the chain contract in the real UI.
+
+In `src/routing.mjs`, replace the hardcoded `KNOWN` array (`:17`) and `parseAddressChain` (`:19-27`) with the seat list, so `@fable` is not silently dropped:
 
 ```js
 import { seatIds } from "./seats.mjs";
 
 export function parseAddressChain(text) {
   const found = [];
-  const known = new Set([...seatIds(), "owner"]);
+  // "owner" is deliberately NOT routable. outbox.claim is recipient-scoped and
+  // the dispatcher only loops real members, so a delivery addressed to "owner"
+  // can never be claimed — it becomes a dead letter with no event recorded.
+  // The final reply already returns to the owner via the `["owner"]` fallback
+  // at dispatcher.mjs:522; the owner never needs to be a hop.
+  const known = new Set(seatIds());
   const re = /@([a-zA-Z][\w-]*)/g;
   let m;
   while ((m = re.exec(String(text || "")))) {
@@ -295,6 +302,23 @@ export function parseAddressChain(text) {
   return found;
 }
 ```
+
+`src/dispatcher.mjs` re-exports `parseAddressChain` from `routing.mjs` on the PR head, so existing test imports keep working and the `dispatcher.mjs:482` fallback re-parse inherits the fix automatically.
+
+- [ ] **Step 5b: Derive the broadcast default from roles**
+
+`src/routing.mjs:16` hardcodes `DEFAULT_BROADCAST = ["codex", "grok"]`. Under the seat table that is wrong — `grok` is an executor, not a deliberator. Replace it:
+
+```js
+import { allSeats } from "./seats.mjs";
+
+/** Unaddressed owner messages go to the deliberators, never the executors. */
+export function defaultBroadcast() {
+  return allSeats().filter((s) => s.role === "deliberator").map((s) => s.id);
+}
+```
+
+Update the single consumer in `routeOwnerSay` from `[...DEFAULT_BROADCAST]` to `defaultBroadcast()`.
 
 - [ ] **Step 6: Run the full suite**
 
@@ -1523,8 +1547,21 @@ git commit -m "dispatcher: advance deliberations on reply, failure, and HALT"
 `max_auto_replies_per_owner_turn` is 4 (`dispatcher.mjs:39-40`), and a worst-case deliberation is 8 runs. Without this the engine dies at round 2. Worse, a tripped cap writes an event but never acks or expires the lease (`:203-218`), so the row stays selectable and re-logs `floor_returned` **every tick forever**, poisoning that chamber.
 
 **Files:**
-- Modify: `src/dispatcher.mjs:203-218`, `:449-451`, `:505-507`
+- Modify: `src/dispatcher.mjs` — **four** cap sites, not three (line numbers below are on the post-PR-#1 head)
 - Test: `test/deliberation.test.mjs` (append)
+
+> **Post-PR-#1 anchors.** PR #1 moves every line number in this task and adds a **fourth** cap site plus a second `hopCount` increment. Locate them by content, not by number:
+>
+> | Site | What to find |
+> |---|---|
+> | 1 | the `hops >= maxHops` refusal in `tick()` |
+> | 2 | the `replies >= maxAuto` refusal in `tick()` |
+> | 3 | the `autoReplies.set(...)` increment on the relay path |
+> | 4 | **new in PR #1** — the chain-relay send guard `if (chainNext && chainNext !== "owner" && (hopCount.get(chamber) \|\| 0) >= maxHops)` and the `hopCount.set(...)` increment beside it |
+>
+> Site 4 must be exempted too, or the test below fails.
+>
+> **Prerequisite:** PR #1 commits `floor_returned` *outside* the branch that actually suppresses the relay, so it fires even when nothing was truncated. That is a blocker fix required before merge (see the merge review). If it somehow ships unfixed, the `floor_returned === 0` assertion below fails spuriously and the bug is in the dispatcher, not in this task.
 
 - [ ] **Step 1: Write the failing test**
 
