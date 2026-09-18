@@ -10,7 +10,9 @@
 // Routing contract exercised here (shared by API and dispatcher via routing.mjs):
 //   - @mentions of known members form the hop chain; root delivers to chain[0] only.
 //   - Repeated mentions are legitimate hops (codex -> grok -> codex).
-//   - Unknown @names are plain text, not routes.
+//   - Unknown @names are plain text, not routes. So is "@owner": the owner is
+//     the floor every chain returns to, never a hop (B1).
+//   - floor_returned is written only when the hop cap actually cuts a relay (B2).
 //   - No mentions + explicit recipients -> those recipients.
 //   - No mentions + no recipients -> codex+grok broadcast (claude only when addressed).
 //   - Provider invocations (runs table) are counted separately from message
@@ -22,6 +24,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApi } from "../src/api.mjs";
 import { createDispatcher } from "../src/dispatcher.mjs";
+import { parseAddressChain } from "../src/routing.mjs";
 
 // Shipped ceilings preserved (10/15/15 daily, 2 member hops, 4 auto replies);
 // only tick/timeout are tightened for test speed.
@@ -35,7 +38,7 @@ function tempHome() {
   return mkdtempSync(join(tmpdir(), "council-chain-http-"));
 }
 
-async function boot() {
+async function boot(dispatcherOpts = {}) {
   const home = tempHome();
   process.env.COUNCIL_HOME = home;
   const api = createApi({ home, config: { host: "127.0.0.1", port: 0 } });
@@ -56,6 +59,7 @@ async function boot() {
     timeoutMs: 8000,
     limits: LIMITS,
     defaultRespond: true,
+    ...dispatcherOpts,
   });
   return { home, api, dispatcher, port, owner: api.tokens.owner };
 }
@@ -116,6 +120,18 @@ function providerRuns(store, chamber) {
   return store.prepare(
     `SELECT id, member, exit FROM runs WHERE chamber_id = ? ORDER BY started ASC`
   ).all(chamber);
+}
+
+function floorReturned(store) {
+  return store.getEvents()
+    .filter((e) => e.kind === "floor_returned")
+    .map((e) => ({ actor: e.actor, ...JSON.parse(e.payload || "{}") }));
+}
+
+async function ownerReplyFrom(store, chamber, member) {
+  return waitFor(() => deliveriesFor(store, chamber).find(
+    (d) => d.recipient === "owner" && d.sender === member && d.kind === "respond"
+  ), { label: `${member} replies to owner` });
 }
 
 describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
@@ -197,6 +213,10 @@ describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
       // Chain hop advanced to the last index on the root row.
       const rootAfter = api.store.prepare("SELECT chain_hop FROM messages WHERE id = ?").get(root.id);
       assert.equal(Number(rootAfter.chain_hop), 2, "root chain_hop advanced to final hop");
+
+      // Two member hops fit inside max_member_hops=2: nothing was cut, so no
+      // floor_returned may be recorded.
+      assert.deepEqual(floorReturned(api.store), [], "no floor_returned when the chain completes within the cap");
 
       const events = api.store.verifyChain();
       assert.equal(events.ok, true, JSON.stringify(events));
@@ -377,6 +397,79 @@ describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
       const root = api.store.prepare("SELECT chain, chain_hop FROM messages WHERE id = ?").get(r.json.message.id);
       assert.deepEqual(JSON.parse(root.chain), ["codex", "codex"]);
       assert.equal(Number(root.chain_hop), 0);
+    } finally {
+      await shutdown(ctx);
+    }
+  });
+
+  // B1 — "@owner" must never swallow a turn. The owner is the floor, not a hop:
+  // nobody dispatches for it and every chain ends by replying to it anyway.
+  it("(g) @owner and @codex: root goes to codex, codex runs, reply reaches the owner", async () => {
+    assert.deepEqual(parseAddressChain("@owner and @codex look at this"), ["codex"]);
+    const ctx = await boot();
+    const { port, owner, api, dispatcher } = ctx;
+    const chamber = "owner-mention";
+    try {
+      const r = await req(port, {
+        method: "POST",
+        path: "/owner/say",
+        token: owner,
+        body: { chamber_id: chamber, content: "@owner and @codex look at this" },
+      });
+      assert.equal(r.status, 200);
+      assert.deepEqual(r.json.message.recipients, ["codex"], "root must reach codex, not the owner seat");
+      const root = api.store.prepare("SELECT chain FROM messages WHERE id = ?").get(r.json.message.id);
+      assert.deepEqual(JSON.parse(root.chain), ["codex"], "owner is not a chain hop");
+      const toOwnerRoot = api.store.prepare(
+        "SELECT COUNT(*) AS c FROM deliveries WHERE message_id = ? AND recipient = 'owner'"
+      ).get(r.json.message.id).c;
+      assert.equal(toOwnerRoot, 0, "the root is never delivered to the owner seat");
+
+      dispatcher.start();
+      await ownerReplyFrom(api.store, chamber, "codex");
+      await sleep(300);
+
+      assert.deepEqual(providerRuns(api.store, chamber).map((x) => x.member), ["codex"], "exactly one codex run");
+      assert.deepEqual(memberMessages(api.store, chamber).map((m) => [m.sender, m.kind]), [["codex", "respond"]]);
+      assert.deepEqual(floorReturned(api.store), []);
+    } finally {
+      await shutdown(ctx);
+    }
+  });
+
+  it("(h) @codex draft @owner check @grok ship runs codex then grok; nothing relays into the owner seat", async () => {
+    assert.deepEqual(parseAddressChain("@codex draft @owner check @grok ship"), ["codex", "grok"]);
+    const ctx = await boot();
+    const { port, owner, api, dispatcher } = ctx;
+    const chamber = "owner-mid-chain";
+    try {
+      const r = await req(port, {
+        method: "POST",
+        path: "/owner/say",
+        token: owner,
+        body: { chamber_id: chamber, content: "@codex draft @owner check @grok ship" },
+      });
+      assert.equal(r.status, 200);
+      assert.deepEqual(r.json.message.recipients, ["codex"]);
+      const root = api.store.prepare("SELECT chain, chain_hop FROM messages WHERE id = ?").get(r.json.message.id);
+      assert.deepEqual(JSON.parse(root.chain), ["codex", "grok"]);
+      assert.equal(Number(root.chain_hop), 0);
+
+      dispatcher.start();
+      await ownerReplyFrom(api.store, chamber, "grok");
+      await sleep(300);
+
+      assert.deepEqual(providerRuns(api.store, chamber).map((x) => x.member), ["codex", "grok"], "codex then grok, one run each");
+      const deliveries = deliveriesFor(api.store, chamber).map((d) => [d.sender, d.kind, d.recipient]);
+      assert.deepEqual(deliveries, [
+        ["owner", "say", "codex"],
+        ["codex", "relay", "grok"],
+        ["grok", "respond", "owner"],
+      ], "root -> codex, codex relays to grok, grok answers the owner");
+      assert.equal(Number(
+        api.store.prepare("SELECT chain_hop FROM messages WHERE id = ?").get(r.json.message.id).chain_hop
+      ), 1);
+      assert.deepEqual(floorReturned(api.store), []);
     } finally {
       await shutdown(ctx);
     }

@@ -9,12 +9,17 @@
 //     same commit (the dispatcher advances hops as replies complete).
 //   - Repeated mentions are legitimate hops (@codex ... @codex).
 //   - Unknown @names are plain text, never routes.
+//   - "@owner" is plain text too. The owner is the floor: nobody dispatches
+//     for it, and every chain already ends with the last member replying to
+//     the owner. Putting "owner" in the chain made "@owner and @codex ..."
+//     deliver the root to a seat with no runner (HTTP 200, zero runs) and made
+//     "@codex ... @owner ... @grok" relay into the void before grok ran.
 //   - No chain + explicit recipients -> those recipients, verbatim.
 //   - No chain + no recipients -> DEFAULT_BROADCAST (codex+grok; claude's
 //     smaller daily ceiling is only spent when claude is addressed).
 export const DEFAULT_BROADCAST = ["codex", "grok"];
 
-const KNOWN = ["codex", "grok", "claude", "owner"];
+export const MEMBERS = ["codex", "grok", "claude"];
 
 export function parseAddressChain(text) {
   const found = [];
@@ -22,7 +27,7 @@ export function parseAddressChain(text) {
   let m;
   while ((m = re.exec(String(text || "")))) {
     const id = m[1].toLowerCase();
-    if (KNOWN.includes(id)) found.push(id);
+    if (MEMBERS.includes(id)) found.push(id);
   }
   return found;
 }
