@@ -57,7 +57,8 @@ loop, no new process.
 | `pending_owner` | Sits in the Black Seat awaiting approval | 0 |
 | `settled` | Approved (by owner, or by proxy under a standing delegation) | 0 |
 | `overruled` | Owner replaced the answer with their own | 0 |
-| `abandoned` | HALT, budget refusal, or owner cancel | 0 |
+| `stalled` | A run failed mid-deliberation. Question, answers, verdicts and round are all preserved; resumes when the member can run again | 0 |
+| `abandoned` | HALT or owner cancel. **Never** a run failure — those stall | 0 |
 
 Transitions:
 
@@ -150,8 +151,29 @@ worst case, 5 at the floor. Grok's 15 now goes largely unused.
 **Rebalancing those ceilings is an owner spend decision and is out of scope here.**
 
 **Preflight:** a deliberation refuses to start unless the remaining daily budget covers the
-8-run worst case for both deliberators. Declining up front beats stranding a debate
+worst case (4 runs per deliberator). Declining up front beats stranding a debate
 half-finished.
+
+**Running out mid-deliberation.** Preflight only knows this Council's own daily counters.
+It cannot see the provider's real subscription limit, which can be exhausted at any
+moment by work done outside the Council entirely. So a run *will* sometimes fail partway
+through a debate.
+
+When that happens the deliberation **stalls, it does not abandon.** The row keeps its
+question, both answers, the verdicts so far and the round; `resumeStalled` puts it back
+on the floor once the member can run again, and the deterministic idempotency keys make
+the re-send a no-op rather than a duplicate. Abandoning would destroy up to six runs of
+real spend because the seventh hit a wall.
+
+Every run failure stalls, not only budget-shaped ones. Nobody here has yet seen what the
+Claude, Codex or Grok CLIs actually print when a subscription limit is hit, so branching
+on a guessed error string would silently mis-handle the real thing. The raw exit code,
+stdout and stderr are recorded in `stall_detail` so the first genuine exhaustion teaches
+us its signature.
+
+**Substituting a different seat mid-debate is deliberately not automatic.** Swapping a
+deliberator changes who agreed to what, which is exactly the kind of quiet rewrite this
+system exists to prevent. If a seat is out for the day, the owner reassigns or cancels.
 
 ## Data model
 

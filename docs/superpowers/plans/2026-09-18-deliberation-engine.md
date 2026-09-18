@@ -738,6 +738,7 @@ CREATE TABLE IF NOT EXISTS deliberations (
   answers TEXT NOT NULL DEFAULT '{}',
   final_answer TEXT,
   content_hash TEXT,
+  stall_detail TEXT,
   created TEXT NOT NULL,
   updated TEXT NOT NULL
 );
@@ -1496,15 +1497,66 @@ try {
 }
 ```
 
-- [ ] **Step 4: Hook the failure path**
+- [ ] **Step 4: Hook the failure path — stall, do not abandon**
+
+A member can run out of provider usage **mid-deliberation**. Abandoning would throw
+away every run already spent — up to 6 real runs destroyed because the 7th hit a
+wall. Stall instead: the row keeps its question, answers, verdicts and round, and
+resumes when usage returns.
+
+**We cannot reliably detect "out of usage" today.** `isCeilingOrAuth` (`dispatcher.mjs`)
+is a regex guess — `/BUDGET|ceiling|auth|unauthorized|forbidden|401|403|token/i` — and
+nobody here has seen what the Claude, Codex or Grok CLIs actually print when a
+subscription limit is hit. So do **not** branch on it. Treat *every* run failure as a
+stall, and record the raw signature so the real string is captured the first time it
+happens.
 
 At `src/dispatcher.mjs:400-408`, inside the run-failure branch before it returns:
 
 ```js
 try {
   const delib = findDeliberationFor(store, claimed.message);
-  if (delib) abandon(store, delib.id, isCeilingOrAuth(reason) ? "budget" : "run_failed");
+  if (delib) {
+    stall(store, delib.id, {
+      member,
+      reason,
+      // Captured verbatim so the first real usage-exhaustion teaches us its
+      // signature. Truncated because provider stderr can be enormous.
+      exit: result?.exit ?? null,
+      stderr: String(result?.stderr || "").slice(0, 2000),
+      stdout: String(result?.stdout || "").slice(0, 2000),
+    });
+  }
 } catch { /* never let cleanup mask the original failure */ }
+```
+
+Add to `src/deliberation.mjs`:
+
+```js
+/**
+ * Hold a deliberation intact after a failed run instead of destroying it.
+ *
+ * Every failure stalls, not just budget ones. A stall costs nothing to recover
+ * from and a wrong abandon costs every run already spent, so the asymmetry
+ * decides it. `detail` preserves the provider's own words for diagnosis.
+ */
+export function stall(store, id, detail) {
+  return store.commit("deliberation_stalled", detail?.member || "dispatcher", (api) => {
+    api.prepare(
+      `UPDATE deliberations SET state='stalled', flag=?, stall_detail=?, updated=?
+       WHERE id=? AND state IN ('answer_1','answer_2','debate')`
+    ).run(String(detail?.reason || "run_failed"), JSON.stringify(detail ?? {}), api.nowIso(), id);
+    api.setRef("deliberations", id, { stalled: detail?.reason || "run_failed", member: detail?.member });
+    return { id, stalled: true };
+  }).result;
+}
+```
+
+Add the column to `src/migrations/003_deliberations.sql` (Task 6) — go back and add
+it there rather than writing a fourth migration:
+
+```sql
+  stall_detail TEXT,
 ```
 
 - [ ] **Step 5: Hook the HALT sweep**
@@ -1783,7 +1835,188 @@ git commit -m "api: deliberation routes and the first real owner gate"
 
 ---
 
-## Task 14: Full-suite verification
+## Task 14: Resume a stalled deliberation
+
+A stall that never resumes is just a slower abandon. The dispatcher tick re-checks
+stalled rows and puts them back on the floor once the member can run again.
+
+**Files:**
+- Modify: `src/deliberation.mjs`
+- Modify: `src/dispatcher.mjs` (tick, after the HALT check)
+- Test: `test/deliberation.test.mjs` (append)
+
+**Interfaces:**
+- Consumes: `preflight` (Task 7), `deliberationKey`/`blindPrompt` (Task 8)
+- Produces: `resumeStalled(store, outbox, {limits}) -> Array<{id, resumed}>`
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+import { stall, resumeStalled } from "../src/deliberation.mjs";
+
+describe("resume after a stall", () => {
+  const LIMITS = { daily_ceiling: { anthropic: 10, codex: 15 } };
+
+  it("preserves the whole deliberation and re-sends the pending round", () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const store = openStore({ home });
+    const outbox = createOutbox(store);
+    try {
+      const r = startDeliberation(store, outbox, {
+        chamber_id: "c1", question: "keep me", deliberators: ["codex", "fable"], limits: LIMITS,
+      });
+      const before = store.prepare("SELECT COUNT(*) AS c FROM messages").get().c;
+
+      stall(store, r.id, { member: "codex", reason: "exit_1", stderr: "usage limit reached" });
+      let row = store.prepare("SELECT * FROM deliberations WHERE id = ?").get(r.id);
+      assert.equal(row.state, "stalled");
+      assert.equal(row.question, "keep me", "the question survives");
+      assert.match(row.stall_detail, /usage limit reached/, "provider words are kept");
+
+      const out = resumeStalled(store, outbox, { limits: LIMITS });
+      assert.equal(out.length, 1);
+      row = store.prepare("SELECT * FROM deliberations WHERE id = ?").get(r.id);
+      assert.equal(row.state, "answer_1", "returns to the state it stalled in");
+      const after = store.prepare("SELECT COUNT(*) AS c FROM messages").get().c;
+      assert.equal(after, before, "the re-send is idempotent, not a duplicate");
+    } finally {
+      try { outbox.close(); } catch { /* */ }
+      try { store.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+  it("stays stalled while the budget is still short", () => {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const store = openStore({ home });
+    const outbox = createOutbox(store);
+    try {
+      const r = startDeliberation(store, outbox, {
+        chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS,
+      });
+      stall(store, r.id, { member: "fable", reason: "exit_1" });
+      const now = new Date().toISOString();
+      for (let i = 0; i < 8; i++) {
+        store.prepare(
+          `INSERT INTO runs(id, member, chamber_id, message_id, argv, started)
+           VALUES(?,?,?,?,?,?)`
+        ).run(`x${i}`, "fable", "c1", null, "[]", now);
+      }
+      assert.equal(resumeStalled(store, outbox, { limits: LIMITS }).length, 0);
+      assert.equal(
+        store.prepare("SELECT state FROM deliberations WHERE id = ?").get(r.id).state,
+        "stalled"
+      );
+    } finally {
+      try { outbox.close(); } catch { /* */ }
+      try { store.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `node --test test/deliberation.test.mjs`
+Expected: FAIL — `resumeStalled is not a function`
+
+- [ ] **Step 3: Implement**
+
+Append to `src/deliberation.mjs`:
+
+```js
+/** Where a stalled row goes back to. `debate` keeps its round. */
+function stateBeforeStall(row) {
+  const f = row.flag || "";
+  if (row.round > 0) return "debate";
+  // answers already holds whoever replied; one answer means answer_2 was pending.
+  const answered = Object.keys(JSON.parse(row.answers || "{}")).filter((k) => k !== "__verdicts");
+  return answered.length >= 1 ? "answer_2" : "answer_1";
+}
+
+/**
+ * Put stalled deliberations back on the floor when their members can run again.
+ *
+ * Re-sending is safe because every engine send uses a deterministic idempotency
+ * key — an already-delivered round is a no-op, not a duplicate. That is the whole
+ * reason the keys are derived from (id, state, round, member) rather than a clock.
+ */
+export function resumeStalled(store, outbox, { limits }) {
+  const rows = store.prepare("SELECT * FROM deliberations WHERE state = 'stalled'").all();
+  const resumed = [];
+
+  for (const row of rows) {
+    const deliberators = JSON.parse(row.deliberators);
+    const pre = preflight(store, { deliberators, limits });
+    if (!pre.ok) continue; // still short — leave it stalled, try again next tick
+
+    const state = stateBeforeStall(row);
+    const answers = JSON.parse(row.answers || "{}");
+
+    store.commit("deliberation_resumed", "dispatcher", (api) => {
+      api.prepare(
+        "UPDATE deliberations SET state=?, flag=NULL, stall_detail=NULL, updated=? WHERE id=? AND state='stalled'"
+      ).run(state, api.nowIso(), row.id);
+      api.setRef("deliberations", row.id, { resumed: state });
+    });
+
+    const targets = state === "answer_1" ? [deliberators[0]]
+      : state === "answer_2" ? [deliberators[1]]
+      : deliberators;
+
+    for (const m of targets) {
+      outbox.send({
+        sender: "owner",
+        recipients: [m],
+        chamber_id: row.chamber_id,
+        kind: "deliberate",
+        content: state === "debate"
+          ? debatePrompt(row.question, answers, row.round)
+          : blindPrompt(row.question),
+        idempotency_key: deliberationKey(row.id, state, row.round, m),
+      });
+    }
+    resumed.push({ id: row.id, resumed: state });
+  }
+  return resumed;
+}
+```
+
+- [ ] **Step 4: Call it from the tick**
+
+In `src/dispatcher.mjs`, in `tick()` immediately after the `if (isHalted())` block
+returns (so a HALTed council never resumes anything):
+
+```js
+try {
+  resumeStalled(store, outbox, { limits });
+} catch { /* a failed resume must never stop the tick */ }
+```
+
+and extend the import:
+
+```js
+import { advanceOnReply, abandon, stall, resumeStalled, findDeliberationFor } from "./deliberation.mjs";
+```
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `node --test`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/deliberation.mjs src/dispatcher.mjs test/deliberation.test.mjs
+git commit -m "deliberation: stall and resume instead of discarding spent runs"
+```
+
+---
+
+## Task 15: Full-suite verification
 
 - [ ] **Step 1: Run everything unpiped**
 
