@@ -474,4 +474,81 @@ describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
       await shutdown(ctx);
     }
   });
+
+  // B2 — floor_returned is a record that a relay was actually suppressed by the
+  // hop cap. It must be written exactly then, and never otherwise.
+  it("(i) chain beyond the cap: one floor_returned, the next hop never runs, reply returns to the owner", async () => {
+    const ctx = await boot();
+    const { port, owner, api, dispatcher } = ctx;
+    const chamber = "over-cap";
+    try {
+      const r = await req(port, {
+        method: "POST",
+        path: "/owner/say",
+        token: owner,
+        body: { chamber_id: chamber, content: "@codex a @grok b @codex c @grok d" },
+      });
+      assert.deepEqual(JSON.parse(
+        api.store.prepare("SELECT chain FROM messages WHERE id = ?").get(r.json.message.id).chain
+      ), ["codex", "grok", "codex", "grok"]);
+
+      dispatcher.start();
+      // Third hop (codex) is at max_member_hops=2: its relay to grok is cut and
+      // it answers the owner instead.
+      await ownerReplyFrom(api.store, chamber, "codex");
+      await sleep(400);
+
+      assert.deepEqual(providerRuns(api.store, chamber).map((x) => x.member), ["codex", "grok", "codex"],
+        "the fourth hop (grok again) is never invoked");
+      assert.deepEqual(deliveriesFor(api.store, chamber).map((d) => [d.sender, d.kind, d.recipient]), [
+        ["owner", "say", "codex"],
+        ["codex", "relay", "grok"],
+        ["grok", "relay", "codex"],
+        ["codex", "respond", "owner"],
+      ]);
+      const third = deliveriesFor(api.store, chamber).find((d) => d.sender === "grok" && d.kind === "relay");
+      assert.deepEqual(floorReturned(api.store), [
+        { actor: "codex", reason: "hop_cap", chamber, truncated_next: "grok" },
+      ], "exactly one floor_returned, for the one relay that was cut");
+      assert.equal(
+        api.store.getEvents().find((e) => e.kind === "floor_returned").ref_id, third.message_id,
+        "floor_returned points at the message whose relay was cut"
+      );
+    } finally {
+      await shutdown(ctx);
+    }
+  });
+
+  it("(j) member at the cap answers the owner itself: nothing is cut, so no floor_returned", async () => {
+    const ctx = await boot({
+      // Stand-in for a provider whose own output addresses the owner: the third
+      // hop (codex answering grok's relay) replies to the owner directly.
+      scriptedOutbound: (member, message) => (
+        member === "codex" && message.sender === "grok"
+          ? [{ kind: "respond", recipient: "owner", content: "shipped" }]
+          : null
+      ),
+    });
+    const { port, owner, api, dispatcher } = ctx;
+    const chamber = "self-answered";
+    try {
+      await req(port, {
+        method: "POST",
+        path: "/owner/say",
+        token: owner,
+        body: { chamber_id: chamber, content: "@codex a @grok b @codex c @grok d" },
+      });
+      dispatcher.start();
+      await ownerReplyFrom(api.store, chamber, "codex");
+      await sleep(400);
+
+      assert.deepEqual(providerRuns(api.store, chamber).map((x) => x.member), ["codex", "grok", "codex"]);
+      const final = deliveriesFor(api.store, chamber).filter((d) => d.recipient === "owner");
+      assert.deepEqual(final.map((d) => [d.sender, d.kind, d.content]), [["codex", "respond", "shipped"]],
+        "the member's own answer is what reached the owner");
+      assert.deepEqual(floorReturned(api.store), [], "no relay was suppressed, so no floor_returned");
+    } finally {
+      await shutdown(ctx);
+    }
+  });
 });

@@ -505,17 +505,18 @@ export function createDispatcher(opts = {}) {
         advance = { root_id: chainState.rootId, hop: hop + 1 };
       }
     }
-    // Hop cap at send time: a further member relay would exceed the cap, so
-    // the chain is truncated and the reply returns to the owner.
-    if (chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
-      store.commit("floor_returned", member, (api) => {
-        api.setRef("messages", message.id, { reason: "hop_cap", chamber, truncated_next: chainNext });
-      });
-      chainNext = null;
-      advance = null;
-    }
-
     if (!outbound.length && opts.defaultRespond !== false) {
+      // Hop cap at send time. Only here is a chain relay actually produced, so
+      // only here can one be suppressed: when the member's own outbound already
+      // answered (loop above), or defaultRespond is off, nothing is truncated
+      // and no floor_returned is recorded.
+      if (chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
+        store.commit("floor_returned", member, (api) => {
+          api.setRef("messages", message.id, { reason: "hop_cap", chamber, truncated_next: chainNext });
+        });
+        chainNext = null;
+        advance = null;
+      }
       if (message.sender !== "owner") {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
