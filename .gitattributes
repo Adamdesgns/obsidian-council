@@ -1,0 +1,4 @@
+# The Council planning docs carry published SHA256 hashes (see
+# docs/obsidian-council/PROVENANCE.md). core.autocrlf would rewrite their line
+# endings on checkout and break those hashes, so pin them to LF everywhere.
+docs/obsidian-council/** text eol=lf
