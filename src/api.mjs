@@ -7,6 +7,7 @@ import { openStore } from "./store.mjs";
 import { createOutbox } from "./outbox.mjs";
 import { councilHome, ensureHome } from "./home.mjs";
 import { loadOrCreateTokens, identityFromToken, parseBearer } from "./tokens.mjs";
+import { routeOwnerSay } from "./routing.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
@@ -334,14 +335,14 @@ export function createApi(opts = {}) {
 
     if (req.method === "POST" && path === "/owner/say") {
       const body = await readBody(req);
-      const recipients = body.recipients || (body.recipient ? [body.recipient] : body.at ? [body.at] : []);
-      const r = outbox.send({
-        sender: "owner",
-        recipients: recipients.length ? recipients : ["codex", "grok"],
+      // One shared routing contract with the dispatcher (routing.mjs): @chains
+      // route the root only to the first member and persist chain/hop state.
+      const r = routeOwnerSay(outbox, {
         chamber_id: body.chamber_id,
         kind: "say",
         content: body.content || body.text || "",
-        idempotency_key: body.idempotency_key || `say:${body.chamber_id}:${Date.now()}:${Math.random()}`,
+        recipients: body.recipients || (body.recipient ? [body.recipient] : body.at ? [body.at] : []),
+        idempotency_key: body.idempotency_key,
       });
       broadcast({ type: "say", message: r.message });
       return sendJson(res, 200, r);

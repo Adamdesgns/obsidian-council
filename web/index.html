@@ -144,12 +144,37 @@ document.getElementById("summon").onclick = async () => {
   await api("/owner/summon", { method: "POST", body: { chamber_id: chamberId, members: ["codex","grok"] } });
   line("summoned codex+grok");
 };
+// One submission = one idempotency key. The key is minted when a new
+// (chamber, content) pair is first sent and kept until the server accepts it,
+// so a click while the request is in flight is ignored and a retry of the same
+// text after a network error reuses the key (the server treats it as a
+// duplicate). Only editing the text or changing chamber mints a new key.
+let saySubmission = null; // { key, chamber, content }
+let sayInFlight = false;
 document.getElementById("send").onclick = async () => {
+  if (sayInFlight) return;
+  const sendBtn = document.getElementById("send");
   const content = document.getElementById("say").value;
-  const at = [...content.matchAll(/@(\w+)/g)].map(m => m[1]);
   chamberId = document.getElementById("chamberSelect").value || chamberId;
-  await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, recipients: at.length ? at : ["codex","grok"] } });
-  document.getElementById("say").value = "";
+  if (!content.trim()) return;
+  if (!saySubmission || saySubmission.chamber !== chamberId || saySubmission.content !== content) {
+    saySubmission = { key: "floor:" + crypto.randomUUID(), chamber: chamberId, content };
+  }
+  const { key } = saySubmission;
+  sayInFlight = true;
+  sendBtn.disabled = true;
+  try {
+    // Routing (@chains, broadcast default) is the server's job — one parser, in
+    // src/routing.mjs.
+    await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, idempotency_key: key } });
+    saySubmission = null;
+    document.getElementById("say").value = "";
+  } catch (e) {
+    line("say error: " + e.message + " (click Say again to retry the same submission)");
+  } finally {
+    sayInFlight = false;
+    sendBtn.disabled = false;
+  }
   pollMessages();
 };
 document.getElementById("haltToggle").onclick = async () => {
