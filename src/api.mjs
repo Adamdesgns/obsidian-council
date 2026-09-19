@@ -9,6 +9,10 @@ import { councilHome, ensureHome } from "./home.mjs";
 import { loadOrCreateTokens, identityFromToken, parseBearer } from "./tokens.mjs";
 import { routeOwnerSay } from "./routing.mjs";
 
+import { seatIds } from "./seats.mjs";
+import { contentHash } from "./sanctions.mjs";
+import { loadLimits } from "./adapters/spawn.mjs";
+import { startDeliberation, readDeliberation, resumeStalled, decide, abandon, haltDeliberations, taskFor } from "./deliberation.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
 
@@ -56,7 +60,9 @@ function readBody(req, limit = 1_000_000) {
       const raw = Buffer.concat(chunks).toString("utf8");
       if (!raw) return resolve({});
       try {
-        resolve(JSON.parse(raw));
+        const body = JSON.parse(raw);
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("object required");
+        resolve(body);
       } catch {
         reject(Object.assign(new Error("invalid JSON"), { statusCode: 400 }));
       }
@@ -77,6 +83,8 @@ function sendJson(res, status, obj) {
 export function createApi(opts = {}) {
   const home = ensureHome(opts.home || councilHome());
   const config = { ...loadConfig(), ...opts.config };
+  if (!["127.0.0.1","localhost","::1"].includes(config.host)) throw new Error("loopback_only");
+  const limits = opts.limits || loadLimits();
   const store = opts.store || openStore({ home });
   const outbox = opts.outbox || createOutbox(store, { leaseMs: config.lease_ms });
   const tokens = opts.tokens || loadOrCreateTokens(home);
@@ -85,7 +93,7 @@ export function createApi(opts = {}) {
 
   // Seed default members
   store.commit("api_boot", "system", (api) => {
-    for (const id of ["claude", "codex", "grok"]) {
+    for (const id of seatIds()) {
       const row = api.prepare("SELECT id FROM members WHERE id = ?").get(id);
       if (!row) {
         api.prepare(
@@ -105,11 +113,17 @@ export function createApi(opts = {}) {
     });
   }
 
+  function assertOrdinaryChamber(id) {
+    if (id && (String(id).startsWith("deliberation-") || store.prepare("SELECT 1 FROM deliberations WHERE chamber_id=?").get(String(id))))
+      throw Object.assign(new Error("deliberation_chamber_reserved"), {statusCode:409});
+  }
+
   function stampSender(identity, body) {
     const b = body && typeof body === "object" ? { ...body } : {};
     if (b.sender != null && String(b.sender) !== identity.member) {
       recordSpoof(identity, b.sender);
     }
+    assertOrdinaryChamber(b.chamber_id);
     b.sender = identity.member;
     return b;
   }
@@ -235,6 +249,8 @@ export function createApi(opts = {}) {
     if (req.method === "POST" && path === "/respond") {
       const body = stampSender(identity, await readBody(req));
       if (body.delivery_id != null && body.gen != null) {
+        const delivery = store.prepare("SELECT * FROM deliveries WHERE id=?").get(body.delivery_id);
+        if (!delivery || delivery.recipient !== member || taskFor(store, delivery.message_id)) return sendJson(res,403,{error:"delivery_not_owned_or_engine_managed"});
         const ack = outbox.ack(body.delivery_id, body.gen, {
           actor: member,
           status: body.status || "acked",
@@ -305,10 +321,38 @@ export function createApi(opts = {}) {
   }
 
   async function ownerRoutes(req, res, path, identity, url) {
+    if (req.method === "GET" && path === "/owner/deliberations") {
+      const rows=store.prepare("SELECT id FROM deliberations ORDER BY created DESC LIMIT 100").all();
+      return sendJson(res,200,{deliberations:rows.map(r=>readDeliberation(store,r.id))});
+    }
+    if (req.method === "POST" && path === "/owner/deliberate") {
+      if (existsSync(join(home,"HALT"))) return sendJson(res,409,{error:"halted"});
+      const body=await readBody(req);
+      const r=startDeliberation(store,{question:body.question || body.content,chamber_id:body.chamber_id,
+        deliberators:body.deliberators,idempotency_key:body.idempotency_key,limits});
+      return sendJson(res,r.ok ? 200 : 409,{...r,error:r.ok ? undefined : r.reason});
+    }
+    const match=/^\/owner\/deliberation\/([^/]+)(?:\/(approve|overrule|resume|cancel))?$/.exec(path);
+    if (match) {
+      const [,id,action]=match;
+      const row=readDeliberation(store,id);
+      if (!row) return sendJson(res,404,{error:"not_found"});
+      if (req.method === "GET" && !action) return sendJson(res,200,row);
+      if (req.method === "POST" && action) {
+        if (action !== "cancel" && existsSync(join(home,"HALT"))) return sendJson(res,409,{error:"halted"});
+        const body=await readBody(req);
+        const r=action === "resume" ? resumeStalled(store,id,{limits})
+          : action === "cancel" ? abandon(store,id)
+          : decide(store,id,{action,candidate_hash:body.candidate_hash,content:body.content});
+        return sendJson(res,r.ok ? 200 : 409,{...r,error:r.ok ? undefined : r.reason});
+      }
+      return sendJson(res,405,{error:"method_not_allowed"});
+    }
     if (req.method === "POST" && path === "/owner/chamber") {
       const body = await readBody(req);
       const committed = store.commit("chamber_created", "owner", (api) => {
         const id = body.id || api.uuid();
+        assertOrdinaryChamber(id);
         api.prepare(
           "INSERT INTO chambers(id, title, created, status) VALUES(?,?,?,?)"
         ).run(id, body.title || "Chamber", api.nowIso(), "open");
@@ -335,6 +379,7 @@ export function createApi(opts = {}) {
 
     if (req.method === "POST" && path === "/owner/say") {
       const body = await readBody(req);
+      assertOrdinaryChamber(body.chamber_id);
       // One shared routing contract with the dispatcher (routing.mjs): @chains
       // route the root only to the first member and persist chain/hop state.
       const r = routeOwnerSay(outbox, {
@@ -350,6 +395,8 @@ export function createApi(opts = {}) {
 
     if (req.method === "POST" && path === "/owner/sanction") {
       const body = await readBody(req);
+      if (typeof body.content !== "string" || !body.content.trim()) return sendJson(res,400,{error:"content_required"});
+      const serverHash=contentHash(body.content);
       const committed = store.commit("sanction_decided", "owner", (api) => {
         const id = body.id || api.uuid();
         api.prepare(
@@ -358,7 +405,7 @@ export function createApi(opts = {}) {
         ).run(
           id,
           body.directive_id ?? null,
-          body.content_hash,
+          serverHash,
           typeof body.scopes === "string" ? body.scopes : JSON.stringify(body.scopes || []),
           "owner",
           api.nowIso(),
@@ -366,7 +413,7 @@ export function createApi(opts = {}) {
           null,
           body.status || (body.approve === false ? "rejected" : "approved")
         );
-        api.setRef("sanctions", id, { content_hash: body.content_hash, status: body.status || "approved" });
+        api.setRef("sanctions", id, { content_hash: serverHash, status: body.status || "approved" });
         return { id };
       });
       return sendJson(res, 200, committed.result);
@@ -375,6 +422,7 @@ export function createApi(opts = {}) {
     if (req.method === "POST" && path === "/owner/halt") {
       writeFileSync(join(home, "HALT"), new Date().toISOString(), "utf8");
       halt = true;
+      haltDeliberations(store);
       store.commit("halt_set", "owner", (api) => api.setRef(null, null, { halt: true }));
       return sendJson(res, 200, { halt: true });
     }

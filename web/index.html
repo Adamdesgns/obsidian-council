@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Obsidian Council — Floor</title>
 <style>
   :root { color-scheme: dark; --bg:#0e0f12; --panel:#16171c; --line:#2a2b31; --text:#e8e8ea; --muted:#9aa; --accent:#7aa2ff; --danger:#ff6b6b; }
@@ -12,7 +13,7 @@
   main { display:grid; grid-template-columns:220px 1fr 280px; min-height:calc(100vh - 52px); }
   aside, section { padding:12px; border-right:1px solid var(--line); background:var(--panel); }
   #floor { display:flex; flex-direction:column; background:var(--bg); }
-  #log { flex:1; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; padding:8px; background:#0a0b0e; border:1px solid var(--line); border-radius:8px; }
+  #log { flex:1; max-height:65vh; min-height:240px; overflow-wrap:anywhere; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; padding:8px; background:#0a0b0e; border:1px solid var(--line); border-radius:8px; }
   #composer { display:flex; gap:8px; padding-top:8px; }
   input, button, select { background:#1a1b21; color:var(--text); border:1px solid #333; padding:8px; border-radius:6px; }
   button { cursor:pointer; }
@@ -24,6 +25,12 @@
   .pill.halt { background:#3a1e1e; color:var(--danger); }
   ul { list-style:none; padding:0; margin:0; }
   li { padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  textarea { width:100%; min-height:80px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; }
+  #decisionText { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.5 system-ui; max-height:45vh; overflow:auto; }
+  button:disabled { opacity:.45; cursor:default; }
+  section, aside { min-width:0; }
+  #say { min-width:0; }
+  @media(max-width:850px) { main { grid-template-columns:1fr; } header { flex-wrap:wrap; } header input { min-width:0!important; width:100%; } }
 </style>
 </head>
 <body>
@@ -52,16 +59,21 @@
     <div id="composer">
       <input id="say" placeholder="@codex @grok plan…" style="flex:1"/>
       <button id="send">Say</button>
+      <button id="deliberate">Deliberate</button>
     </div>
   </section>
   <aside>
     <h2>Black Seat</h2>
-    <div id="sanctions"><em class="muted">No pending sanctions</em></div>
-    <div class="row" style="margin-top:8px">
-      <input id="sanHash" placeholder="content hash" style="flex:1"/>
-      <button id="approve">Approve</button>
-      <button id="reject" class="danger">Reject</button>
-    </div>
+    <p>Deliberate asks two members, then brings their answer here for your decision.</p>
+    <label for="deliberationSelect">Question</label>
+    <select id="deliberationSelect" style="width:100%"><option value="">No deliberations yet</option></select>
+    <p id="decisionStatus" role="status">No question selected.</p>
+    <pre id="decisionText"></pre>
+    <div class="row"><button id="approveDecision" disabled>Approve this answer</button><button id="resumeDecision" disabled>Resume</button><button id="cancelDecision" disabled>Cancel</button></div>
+    <label for="overrideAnswer">Your replacement answer</label>
+    <textarea id="overrideAnswer" placeholder="Write your decision to overrule"></textarea>
+    <button id="overruleDecision" disabled>Use my answer</button>
+    <p id="decisionError" role="alert"></p>
     <h2 style="margin-top:16px">Members</h2>
     <ul id="members"></ul>
     <h2 style="margin-top:16px">HALT</h2>
@@ -168,7 +180,7 @@ document.getElementById("send").onclick = async () => {
     // src/routing.mjs.
     await api("/owner/say", { method: "POST", body: { chamber_id: chamberId, content, idempotency_key: key } });
     saySubmission = null;
-    document.getElementById("say").value = "";
+    if (document.getElementById("say").value === content) document.getElementById("say").value = "";
   } catch (e) {
     line("say error: " + e.message + " (click Say again to retry the same submission)");
   } finally {
@@ -183,22 +195,12 @@ document.getElementById("haltToggle").onclick = async () => {
   else await api("/owner/halt", { method: "POST", body: {} });
   refresh();
 };
-document.getElementById("approve").onclick = async () => {
-  const content_hash = document.getElementById("sanHash").value.trim();
-  await api("/owner/sanction", { method: "POST", body: { content_hash, status: "approved" } });
-  line("sanction approved " + content_hash.slice(0,12));
-};
-document.getElementById("reject").onclick = async () => {
-  const content_hash = document.getElementById("sanHash").value.trim();
-  await api("/owner/sanction", { method: "POST", body: { content_hash, status: "rejected", approve: false } });
-  line("sanction rejected");
-};
-document.getElementById("refresh").onclick = refresh;
+document.getElementById("refresh").onclick = async()=>{await refresh();await refreshDecisions();};
 
 function connectFloor() {
   if (es) try { es.close(); } catch {}
   if (!chamberId || !token()) return;
-  es = new EventSource(apiBase + "/owner/floor/" + chamberId); // EventSource cannot set Authorization — use fetch stream in a later polish; for now poll
+  // Authenticated polling below is used; EventSource cannot carry the bearer token.
 }
 // Poll the chamber's messages; render every reply from every seat.
 let lastSeen = "";
@@ -214,6 +216,7 @@ async function pollMessages() {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
       lastSeen = m.created;
+      if (m.sender === "engine") continue;
       const who = m.sender === "owner" ? "you" : m.sender;
       const t = m.created.slice(11, 19) + "Z";
       line(`[${t}] ${who} (${m.kind}):\n${m.content}\n`);
@@ -227,11 +230,78 @@ setInterval(async () => {
     document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
   } catch {}
   await pollMessages();
+  await refreshDecisions();
 }, 3000);
 document.getElementById("chamberSelect").addEventListener("change", pollMessages);
 
+
+let decisionRows = [], selectedDecision = localStorage.getItem("council.decision") || "", decisionBusy = false;
+function renderDecision() {
+  const row = decisionRows.find(r=>r.id===selectedDecision);
+  const status=document.getElementById("decisionStatus"), text=document.getElementById("decisionText");
+  const labels={answer_1:"First independent answer",answer_2:"Second independent answer",debate:"Comparing answers",pending_owner:"Ready for your decision",settled:"Approved",overruled:"Your answer saved",stalled:"Paused — needs attention",abandoned:"Cancelled"};
+  status.textContent=row ? labels[row.state] + (row.state === "debate" ? " · round " + row.round + "/3" : "") + (row.state === "pending_owner" ? " · " + row.flag : "") : "No question selected.";
+  const details = row ? ["QUESTION",row.question,"ANSWER",row.final_answer || row.candidate || "Waiting for independent answers…",
+    ...(row.stall_detail ? ["PAUSED — fix the member's access or allowance, then click Resume.",row.stall_detail] : []),
+    "DISCUSSION",...(row.replies || []).filter(r=>r.response!==null).map(r=>r.member+" ("+r.phase+", round "+r.round+"):\n"+r.response)] : [];
+  text.textContent=details.join("\n\n");
+  document.getElementById("approveDecision").disabled=decisionBusy || row?.state!=="pending_owner";
+  document.getElementById("overruleDecision").disabled=decisionBusy || row?.state!=="pending_owner";
+  document.getElementById("resumeDecision").disabled=decisionBusy || row?.state!=="stalled";
+  document.getElementById("cancelDecision").disabled=decisionBusy || !row || ["settled","overruled","abandoned"].includes(row.state);
+}
+async function refreshDecisions() {
+  if(!token()) return;
+  try {
+    const r=await api("/owner/deliberations"); decisionRows=r.deliberations || [];
+    if (!decisionRows.some(r=>r.id===selectedDecision)) selectedDecision=decisionRows[0]?.id || "";
+    const sel=document.getElementById("deliberationSelect");sel.innerHTML="";
+    for(const row of decisionRows){const option=document.createElement("option");option.value=row.id;option.textContent=row.question.slice(0,65);option.selected=row.id===selectedDecision;sel.appendChild(option);}
+    renderDecision();
+  } catch(e){document.getElementById("decisionError").textContent=e.message;}
+}
+document.getElementById("deliberationSelect").addEventListener("change",()=>{
+  selectedDecision=document.getElementById("deliberationSelect").value;
+  localStorage.setItem("council.decision",selectedDecision);renderDecision();
+});
+let deliberationSending=false;
+document.getElementById("deliberate").onclick=async()=>{
+  if(deliberationSending) return;
+  const question=document.getElementById("say").value.trim(); if(!question)return;
+  const source=document.getElementById("chamberSelect").value || chamberId || null;
+  let submission;try{submission=JSON.parse(localStorage.getItem("council.deliberateSubmission") || "null");}catch{}
+  if(!submission || submission.question!==question || submission.source!==source) submission={question,source,key:"deliberate:"+crypto.randomUUID()};
+  localStorage.setItem("council.deliberateSubmission",JSON.stringify(submission));
+  deliberationSending=true;document.getElementById("deliberate").disabled=true;
+  try{
+    const r=await api("/owner/deliberate",{method:"POST",body:{question,chamber_id:source,idempotency_key:submission.key}});
+    selectedDecision=r.id;localStorage.setItem("council.decision",r.id);localStorage.removeItem("council.deliberateSubmission");
+    if(document.getElementById("say").value.trim()===question)document.getElementById("say").value="";
+    document.getElementById("decisionError").textContent="";await refreshDecisions();await refresh();
+  }catch(e){document.getElementById("decisionError").textContent=e.message;}
+  finally{deliberationSending=false;document.getElementById("deliberate").disabled=false;}
+};
+async function decideAction(action){
+  const row=decisionRows.find(r=>r.id===selectedDecision);if(!row || decisionBusy)return;
+  const content=document.getElementById("overrideAnswer").value.trim();
+  if(action==="overrule" && !content){document.getElementById("decisionError").textContent="Write your replacement answer first.";return;}
+  decisionBusy=true;renderDecision();
+  try{
+    await api("/owner/deliberation/"+encodeURIComponent(row.id)+"/"+action,{method:"POST",body:{candidate_hash:row.candidate_hash,content}});
+    document.getElementById("decisionError").textContent="";
+    if(action==="overrule")document.getElementById("overrideAnswer").value="";
+    await refreshDecisions();
+  }catch(e){document.getElementById("decisionError").textContent=e.message;}
+  finally{decisionBusy=false;renderDecision();}
+}
+document.getElementById("approveDecision").onclick=()=>decideAction("approve");
+document.getElementById("overruleDecision").onclick=()=>decideAction("overrule");
+document.getElementById("resumeDecision").onclick=()=>decideAction("resume");
+document.getElementById("cancelDecision").onclick=()=>decideAction("cancel");
+
+refreshDecisions();
 refresh();
-line("Floor ready. Paste owner token, create a chamber, summon, say.");
+line("Floor ready. Type a question, then choose Say or Deliberate.");
 </script>
 </body>
 </html>

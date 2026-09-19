@@ -10,23 +10,34 @@ the calls each CLI already makes to its own provider.
 
 Zero npm dependencies. Plain Node. One process. MIT.
 
-## What it does today (v0.1)
+## Local Deliberation Engine (not released)
 
-- **Three seats:** Codex CLI, Grok CLI, Claude Code. Each runs headlessly in its own sandbox under
-  your existing login. Proven live with Codex + Grok in a three-hop exchange with a deliberate
+The local build adds **Deliberate**: two members answer independently, compare answers for up to three rounds, then bring an exact candidate answer to the Black Seat. Approve it, replace it, or cancel. Failed runs pause; Resume retries only unfinished work. No Jev account or key is needed. Approval records a decision; it does not execute it.
+
+Run `npm run preview:fake` for a safe local walkthrough with simulated providers and a fresh temporary home. The printed link opens that fixture; type `stop` in its terminal to close it. Ordinary `npm start` uses your real configured CLIs and home.
+
+Four seats use three adapters: `codex`, `grok`, `claude`, and `fable` (another Claude seat sharing the same quota). The `fable` seat uses the installed Claude CLI default unless you set its `model` in `config/council.json`; no specific live model version is certified by fake tests.
+
+See [local acceptance evidence](docs/evidence/deliberation-local-2026-09-19.md) and [corrected implementation contract](docs/superpowers/plans/2026-09-19-deliberation-corrections.md). Main/release and Adam's human acceptance remain separate gates.
+
+## Existing Floor and routing
+
+- **Three CLI adapters:** Codex CLI, Grok CLI, Claude Code, using your existing logins and
+  their configured review restrictions. Proven live with Codex + Grok in a three-hop exchange with a deliberate
   mid-exchange restart (`docs/evidence/phase2-live.md`).
 - **The Floor:** a static page over loopback HTTP. Create a chamber, summon members, say a line,
   watch the replies. Summons never spend a model run.
 - **Directed chains:** `@codex … @grok … @codex …` in one line becomes an ordered chain, persisted
   in the database, so it survives a restart.
-- **Durable outbox:** every message is delivered exactly once per recipient, with leases and
-  generations. Failed or cancelled runs are never acknowledged, so nothing is silently dropped.
+- **Durable outbox:** idempotent messages with leased deliveries and generation fencing.
+  Interrupted provider execution may retry; it is not exactly once. Deliberation replies, acknowledgment
+  and next steps commit together. Failed deliberations pause for explicit resume.
 - **The Record:** every event is hash-chained. `GET /owner/state` verifies the whole chain.
 - **HALT:** one switch stops every member. It is a file, so it survives restarts and works even if
   the page is closed.
 - **Black Seat sanctions:** an approval is bound to the content hash of the exact thing approved,
   single use, expiring. A modified version, a reused approval, or a forged sender all fail.
-- **Ceilings:** per-member daily run caps and hop caps in `config/limits.json`. The defaults are
+- **Ceilings:** per-account daily run caps and hop caps in `config/limits.json`. The defaults are
   small on purpose.
 
 ## What it does not do yet
@@ -64,8 +75,7 @@ Open it. The Floor keeps the token in that browser and scrubs it from the addres
 2. **Summon** the members (free, no model run).
 3. **Say** a line with `@` names. Replies appear on the Floor as each run finishes.
 
-State lives under `%LOCALAPPDATA%\ObsidianCouncil\` (override with `COUNCIL_HOME`). Delete that
-folder to start over. The owner token is in `tokens.json` there.
+State lives under `%LOCALAPPDATA%\ObsidianCouncil\` (override with `COUNCIL_HOME`). The owner token is in `tokens.json` there.
 
 `COUNCIL_PORT=0` picks a free port. `COUNCIL_FAKE=1` swaps every CLI for a scripted fake, which is
 how the tests run.
@@ -76,7 +86,8 @@ how the tests run.
 npm test
 ```
 
-39 tests, all against fakes, each on its own temp home. No model runs, no network.
+86 tests against fake providers and temporary homes. The test launcher refuses live provider execution.
+HTTP tests use loopback only; no external API calls.
 
 ## Layout
 
@@ -87,6 +98,9 @@ src/dispatcher.mjs     claim -> packet -> spawn -> ack; chains, fencing, resume
 src/outbox.mjs         deliveries, leases, generations, idempotency
 src/store.mjs          node:sqlite, hash-chained events, migrations
 src/sanctions.mjs      content-hash-bound single-use approvals
+src/deliberation.mjs   durable blind/debate/owner/resume state machine
+src/seats.mjs          configured adapter/model/account roles
+src/verdict.mjs        strict final-line debate verdicts
 src/mcp-bridge.mjs     stdio MCP server over the HTTP API (off by default)
 src/adapters/          one spawn path; claude / codex / grok argv and sandbox flags
 web/index.html         the Floor

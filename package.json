@@ -15,6 +15,7 @@
   },
   "scripts": {
     "start": "node src/council.mjs",
-    "test": "node --test"
+    "test": "node scripts/test.mjs",
+    "preview:fake": "node scripts/preview-fake.mjs"
   }
 }

@@ -17,9 +17,11 @@
 //   - No chain + explicit recipients -> those recipients, verbatim.
 //   - No chain + no recipients -> DEFAULT_BROADCAST (codex+grok; claude's
 //     smaller daily ceiling is only spent when claude is addressed).
+import { seatIds } from "./seats.mjs";
+
 export const DEFAULT_BROADCAST = ["codex", "grok"];
 
-export const MEMBERS = ["codex", "grok", "claude"];
+export const MEMBERS = seatIds();
 
 export function parseAddressChain(text) {
   const found = [];

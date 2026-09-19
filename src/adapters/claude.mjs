@@ -8,13 +8,14 @@ export function describe() {
   return { id: "claude", kind: "cli" };
 }
 
-export function argsFor(packet, { resume = null, persist = false, newId = null, maxTurns = 1 } = {}) {
+export function argsFor(packet, { resume = null, persist = false, newId = null, maxTurns = 1, model = null } = {}) {
   const prompt = typeof packet === "string" ? packet : packet.prompt || packet.text || "";
   return [
     "--print",
     "--output-format", "json",
     "--max-turns", String(maxTurns),
     "--permission-mode", "default",
+    ...(model ? ["--model", model] : []),
     ...(resume ? ["--resume", resume] : []),
     "--disallowedTools", ...CLAUDE_DENY,
     "--",

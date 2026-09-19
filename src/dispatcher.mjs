@@ -13,6 +13,9 @@ import * as codexAd from "./adapters/codex.mjs";
 import * as grokAd from "./adapters/grok.mjs";
 import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
 
+import { seatOf } from "./seats.mjs";
+import { taskFor, canDispatch, completeReply, stall, haltDeliberations } from "./deliberation.mjs";
+
 const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
 
 export { parseAddressChain };
@@ -23,6 +26,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const FAKE = join(ROOT, "src", "testutil", "fake-member.mjs");
 
 export function createDispatcher(opts = {}) {
+  if (opts.scriptedReply && !opts.useFake) throw new Error("scriptedReply requires fake providers");
   const home = ensureHome(opts.home || councilHome());
   const store = opts.store || openStore({ home });
   const outbox = opts.outbox || createOutbox(store, { leaseMs: opts.leaseMs });
@@ -129,7 +133,7 @@ export function createDispatcher(opts = {}) {
         ).run(now, "interrupted", run.id);
         if (run.message_id) {
           api.prepare(
-            `UPDATE deliveries SET lease_until = ?, updated = ?
+            `UPDATE deliveries SET lease_until = ?, updated = ?, attempt_gen=attempt_gen+1
              WHERE message_id = ? AND recipient = ? AND status = 'leased'`
           ).run(now, now, run.message_id, run.member);
         }
@@ -158,12 +162,12 @@ export function createDispatcher(opts = {}) {
   async function tick() {
     if (stopped) return;
     if (isHalted()) {
+      haltDeliberations(store);
       // Cancel active fakes if possible
       for (const [k, meta] of active) {
         if (meta.child) {
           try {
-            const { killTree } = await import("./adapters/spawn.mjs");
-            killTree(meta.child.pid);
+            killTreeSync(meta.child.pid);
           } catch { /* */ }
         }
         setPresence(k.split("::")[0], "blocked", "HALT");
@@ -185,6 +189,8 @@ export function createDispatcher(opts = {}) {
       ).all(member, new Date().toISOString());
 
       for (const row of pending) {
+        const engineTask = taskFor(store, row.message_id);
+        if (engineTask && !canDispatch(store, row.message_id, member)) continue;
         if (row.status === "waiting") continue; // waiting for peer answer
         const chamber = row.chamber_id || "_";
         const key = activeKey(member, chamber);
@@ -195,17 +201,17 @@ export function createDispatcher(opts = {}) {
         // to the owner), so a chain with exactly maxHops member hops completes.
         // Initiating hops beyond the cap is blocked at send time in runOne.
         const hops = hopCount.get(chamber) || 0;
-        if (hops > maxHops && row.sender !== "owner") {
+        if (!engineTask && hops > maxHops && row.sender !== "owner") {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "hop_cap", chamber });
           });
           continue;
         }
         const autos = autoReplies.get(chamber) || 0;
-        if (row.sender === "owner") {
+        if (!engineTask && row.sender === "owner") {
           autoReplies.set(chamber, 0);
           hopCount.set(chamber, 0);
-        } else if (autos >= maxAuto) {
+        } else if (!engineTask && autos >= maxAuto) {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "auto_reply_cap", chamber });
           });
@@ -213,7 +219,9 @@ export function createDispatcher(opts = {}) {
         }
 
         const meta = { child: null };
-        const job = runOne(member, row, chamber, meta).finally(() => active.delete(key));
+        const job = runOne(member, row, chamber, meta).catch((error) => {
+          setPresence(member, "blocked", String(error.message));
+        }).finally(() => active.delete(key));
         active.set(key, meta);
         meta.promise = job;
         break; // one new spawn per member per tick
@@ -223,12 +231,15 @@ export function createDispatcher(opts = {}) {
 
   async function runOne(member, deliveryRow, chamber, meta) {
     setPresence(member, "starting");
-    const claimed = outbox.claim(member);
+    const claimed = outbox.claim(member, { deliveryId: deliveryRow.id });
     if (!claimed) {
       setPresence(member, "idle");
       return;
     }
     const { delivery, message, gen } = claimed;
+    chamber = message.chamber_id || "_";
+    const engineTask = taskFor(store, message.id);
+    const adapterId = seatOf(member)?.adapter;
 
     // P2-6e: summons never spend model runs — presence invited only.
     if (message.kind === "summon") {
@@ -243,7 +254,7 @@ export function createDispatcher(opts = {}) {
     let session = store.prepare(
       "SELECT * FROM sessions WHERE member = ? AND chamber_id = ?"
     ).get(member, chamber === "_" ? "" : chamber);
-    let resume = session?.provider_session_id || null;
+    let resume = engineTask ? null : session?.provider_session_id || null;
     let resumeFailed = false;
 
     const msgPayload = {
@@ -253,25 +264,25 @@ export function createDispatcher(opts = {}) {
       content: message.content,
     };
     // P2-6d/e: Codex + Grok plain-text / bridge=none (bridge cert is Phase 3).
-    const plainText = member === "codex" || member === "grok" || !!opts.disableBridge;
+    const plainText = !!engineTask || adapterId === "codex" || adapterId === "grok" || !!opts.disableBridge;
     let packet = buildPacket({ member, chamber, message: msgPayload, plainText });
 
     const cwd = join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
     mkdirSync(cwd, { recursive: true });
-    let bridge = prepareBridge(member, {
+    let bridge = prepareBridge(adapterId, {
       cwd,
       token: tokens[member],
       apiBase,
-      disabled: !!opts.disableBridge || member === "codex" || member === "grok",
+      disabled: !!engineTask || !!opts.disableBridge || adapterId === "codex" || adapterId === "grok",
     });
     const spawnOpts = {
       chamber_id: chamber === "_" ? null : chamber,
       message_id: message.id,
       resume,
-      persist: !resume,
+      persist: !engineTask && !resume,
       newId: member === "grok" && !resume ? crypto.randomUUID() : null,
       role: "review",
-      memberToken: tokens[member],
+      memberToken: engineTask ? null : tokens[member],
       cwd,
       timeoutMs: opts.timeoutMs,
       limits: opts.limits || limits,
@@ -284,6 +295,10 @@ export function createDispatcher(opts = {}) {
     // Test injection via opts only (no FAKE_MODE knowledge in dispatcher).
     if (opts.useFake || opts.fakePath) {
       spawnOpts.fakePath = opts.fakePath || FAKE;
+      if (opts.scriptedReply) {
+        const scripted = opts.scriptedReply(member, message);
+        spawnOpts.env.FAKE_SCRIPT = JSON.stringify(typeof scripted === "string" ? {text:scripted} : scripted);
+      }
     }
     if (opts.refuseResumeOnce && resume && opts.refuseResumeEnv) {
       spawnOpts.env = { ...spawnOpts.env, ...opts.refuseResumeEnv };
@@ -373,7 +388,7 @@ export function createDispatcher(opts = {}) {
     // P2-6e item 3: stamp bridge on every run of this spawn path (skip when mixed statuses already set).
     if (!mixedBridgeFallback) stampBridgeAll(bridgeStatus);
 
-    const ad = ADAPTERS[member];
+    const ad = ADAPTERS[adapterId];
     let text = "";
     if (ad && ad.finalText) {
       try { text = ad.finalText(result) || ""; } catch { text = ""; }
@@ -394,11 +409,21 @@ export function createDispatcher(opts = {}) {
     const failReason = classifyRunFailure(result);
     if (failReason) {
       stampBridgeAll(bridgeStatus, { fail: failReason });
-      try { expireDeliveryLease(delivery.id, failReason, member); } catch { /* store may be closed after hardStop */ }
+      try {
+        if (engineTask) stall(store, {message, delivery, gen, member, reason: failReason, result});
+        else expireDeliveryLease(delivery.id, failReason, member);
+      } catch { /* store may be closed after hardStop */ }
       try {
         if (isCeilingOrAuth(failReason)) setPresence(member, "blocked", failReason);
         else setPresence(member, "idle");
       } catch { /* */ }
+      return;
+    }
+
+    if (engineTask) {
+      if (isHalted()) haltDeliberations(store);
+      completeReply(store, {message, delivery, gen, member, text});
+      setPresence(member, "idle");
       return;
     }
 

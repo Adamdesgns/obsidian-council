@@ -80,6 +80,9 @@ export function localScreen(received, reply, cfg = {}) {
   }
   for (const re of CLAIMS_ABSENCE) {
     if (re.test(text)) {
+      // Quoted, conditional and negated discussion is not an absence claim.
+      // The free screen abstains; it never blocks work based on this ambiguity.
+      if (/["'`“”]|\b(if|when|unless|incorrect|false|not true|never said|does not mean)\b/i.test(text)) return null;
       // The member says it got nothing, but material was delivered. This is the bug.
       return {
         decision: "NOT_RESPONSIVE",
@@ -153,7 +156,7 @@ export function createJudge(opts = {}) {
         ...local,
         member,
         messageId,
-        escalate: local.confidence < escalateBelow,
+        escalate: local.decision === "UNCLEAR" || local.confidence < escalateBelow,
         // The record keeps what was looked at, since a typed model gives no reasoning.
         evidence: { rule: local.rule, ratio: local.ratio ?? null, detail: local.detail ?? null },
       });
@@ -175,11 +178,25 @@ export function createJudge(opts = {}) {
 
     const state = { material: String(received), reply: String(reply) };
     const questions = buildQuestions();
-    const res = await jev.evaluate({ model, state, questions });
+    let res, timer;
+    const controller = new AbortController();
+    try {
+      res = await Promise.race([
+        Promise.resolve().then(() => jev.evaluate({ model, state, questions, signal: controller.signal })),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => { controller.abort(); reject(new Error("judge_timeout")); }, opts.timeoutMs ?? 5000);
+        }),
+      ]);
+    } catch (error) {
+      return note({ decision:"UNCLEAR", confidence:0, via:"jev", rule:"client_error",
+        escalate:true, member, messageId, evidence:{error:String(error.message || error).slice(0,200)} });
+    } finally { clearTimeout(timer); }
 
     const choice = res?.responsive || {};
-    const decision = VERDICTS.includes(choice.choice) ? choice.choice : "UNCLEAR";
-    const confidence = Number(choice.confidence ?? 0);
+    const valid = VERDICTS.includes(choice.choice) && typeof choice.confidence === "number"
+      && Number.isFinite(choice.confidence) && choice.confidence >= 0 && choice.confidence <= 1;
+    const decision = valid ? choice.choice : "UNCLEAR";
+    const confidence = valid ? choice.confidence : 0;
 
     return note({
       decision,
@@ -189,7 +206,7 @@ export function createJudge(opts = {}) {
       model: res?.model || model,
       member,
       messageId,
-      escalate: confidence < escalateBelow,
+      escalate: decision === "UNCLEAR" || confidence < escalateBelow,
       // No chain of thought exists, so persist the inputs and the raw numbers instead.
       evidence: {
         probabilities: choice.probabilities ?? null,

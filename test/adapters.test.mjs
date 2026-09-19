@@ -133,7 +133,7 @@ describe("P2-4 adapters and spawn", () => {
   });
 
   it("Build verifyBuildResult refuses when rollout is not workspace-write", () => {
-    const home = process.env.USERPROFILE || process.env.HOME;
+    const home = mkdtempSync(join(tmpdir(), "council-policy-"));
     const day = new Date();
     const dir = join(
       home, ".codex", "sessions",
@@ -154,16 +154,16 @@ describe("P2-4 adapters and spawn", () => {
     );
     try {
       const result = { stdout: JSON.stringify({ type: "thread.started", thread_id: tid }) };
-      const v = codex.verifyBuildResult(result);
+      const v = codex.verifyBuildResult(result, {home});
       assert.equal(v.ok, false);
       assert.match(v.refused, /not workspace-write/);
     } finally {
-      try { rmSync(bad, { force: true }); } catch { /* */ }
+      try { rmSync(home, { recursive:true, force: true }); } catch { /* */ }
     }
   });
 
   it("Build verifyBuildResult accepts workspace-write rollout", () => {
-    const home = process.env.USERPROFILE || process.env.HOME;
+    const home = mkdtempSync(join(tmpdir(), "council-policy-"));
     const day = new Date();
     const dir = join(
       home, ".codex", "sessions",
@@ -182,11 +182,11 @@ describe("P2-4 adapters and spawn", () => {
     );
     try {
       const result = { stdout: JSON.stringify({ type: "thread.started", thread_id: tid }) };
-      const v = codex.verifyBuildResult(result);
+      const v = codex.verifyBuildResult(result, {home});
       assert.equal(v.ok, true, JSON.stringify(v));
       assert.ok(codex.isWorkspaceWritePolicy(v.policy));
     } finally {
-      try { rmSync(good, { force: true }); } catch { /* */ }
+      try { rmSync(home, { recursive:true, force: true }); } catch { /* */ }
     }
   });
 });

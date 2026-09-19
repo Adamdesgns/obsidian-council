@@ -12,13 +12,17 @@ import { createApi } from "./api.mjs";
 import { createDispatcher } from "./dispatcher.mjs";
 import { councilHome } from "./home.mjs";
 
+import { seatIds } from "./seats.mjs";
+import { loadLimits } from "./adapters/spawn.mjs";
+
 export async function startCouncil(opts = {}) {
   const home = opts.home || councilHome();
   const config = { ...(opts.config || {}) };
   if (opts.port != null) config.port = opts.port;
   else if (process.env.COUNCIL_PORT) config.port = Number(process.env.COUNCIL_PORT);
 
-  const api = createApi({ home, config });
+  const limits=opts.limits || loadLimits();
+  const api = createApi({ home, config, limits });
   const bound = await api.listen();
   const port = api.server.address().port;
   const base = `http://${bound.host}:${port}`;
@@ -27,11 +31,15 @@ export async function startCouncil(opts = {}) {
     home,
     store: api.store,
     outbox: api.outbox,
-    members: opts.members || ["codex", "grok", "claude"],
+    members: opts.members || seatIds(),
+    limits,
+    scriptedReply: opts.scriptedReply,
+    tickMs: opts.tickMs,
     tokens: api.tokens.members,
     apiBase: base,
     useFake: opts.useFake ?? process.env.COUNCIL_FAKE === "1",
     defaultRespond: true,
+    disableBridge: opts.disableBridge,
   });
   dispatcher.start();
 

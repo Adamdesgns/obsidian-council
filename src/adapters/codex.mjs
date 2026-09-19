@@ -77,9 +77,8 @@ export function envFor(role, cwd) {
  * Read effective sandbox_policy from Codex rollout JSONL for thread_id.
  * Mirrors spike/a3b-sandbox-explicit.mjs effectivePolicy (do not edit spike/).
  */
-export function effectivePolicy(threadId, { now = new Date() } = {}) {
+export function effectivePolicy(threadId, { now = new Date(), home = process.env.USERPROFILE || process.env.HOME } = {}) {
   if (!threadId) return { note: "no thread id" };
-  const home = process.env.USERPROFILE || process.env.HOME;
   const dir = join(
     home,
     ".codex",
@@ -122,9 +121,9 @@ export function isWorkspaceWritePolicy(policy) {
  * After a Build run: read rollout and refuse if not workspace-write.
  * @returns {{ ok: true, policy } | { ok: false, refused: string, policy }}
  */
-export function verifyBuildResult(result) {
+export function verifyBuildResult(result, opts = {}) {
   const tid = sessionOf(result);
-  const policy = effectivePolicy(tid);
+  const policy = effectivePolicy(tid, opts);
   if (!isWorkspaceWritePolicy(policy)) {
     return {
       ok: false,

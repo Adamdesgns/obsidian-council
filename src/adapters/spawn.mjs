@@ -9,6 +9,7 @@ import * as codex from "./codex.mjs";
 import * as grok from "./grok.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+import { seatOf, allSeats, accountOf } from "../seats.mjs";
 const ADAPTERS = { claude, codex, grok };
 
 const KEEP = [
@@ -47,7 +48,10 @@ export function redact(s) {
 
 export function killTree(pid) {
   if (!pid) return;
-  spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
+  const killed = spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
+  if (killed.error || killed.status !== 0) {
+    try { process.kill(pid); } catch { /* child already closed or inaccessible */ }
+  }
 }
 
 export function loadLimits() {
@@ -94,11 +98,11 @@ function resolveCli(member, opts = {}) {
   return { found: false };
 }
 
-function runsToday(store, member) {
+export function runsTodayForAccount(store, account) {
   const day = new Date().toISOString().slice(0, 10);
   return store.prepare(
-    `SELECT COUNT(*) AS c FROM runs WHERE member = ? AND started >= ?`
-  ).get(member, day + "T00:00:00.000Z").c;
+    `SELECT COUNT(*) AS c FROM runs WHERE member IN (SELECT value FROM json_each(?)) AND started >= ? AND (checkpoint IS NULL OR json_extract(checkpoint, '$.refused') IS NULL)`
+  ).get(JSON.stringify(allSeats().filter(s => s.account === account).map(s => s.id)), day + "T00:00:00.000Z").c;
 }
 
 /**
@@ -108,19 +112,23 @@ function runsToday(store, member) {
  */
 export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   const limits = opts.limits || loadLimits();
-  const ceiling = limits.daily_ceiling?.[member] ?? limits.daily_ceiling?.fake ?? 100;
+  const seat = seatOf(member);
+  if (!seat && member !== "fake") throw new Error("unknown seat: " + member);
+  const account = seat?.account || "fake";
+  const ceiling = limits.daily_ceiling?.[account] ?? limits.daily_ceiling?.fake ?? 0;
   const timeoutMs = opts.timeoutMs
-    ?? limits.timeout_ms?.[member]
+    ?? limits.timeout_ms?.[seat?.adapter || member]
     ?? limits.timeout_ms?.fake
     ?? 240_000;
   const role = opts.role || "review";
   const cwd = opts.cwd || process.cwd();
-  const adapter = ADAPTERS[member];
+  const adapter = ADAPTERS[seat?.adapter || member];
 
   let argv = argvOrPacket;
   if (argvOrPacket && !Array.isArray(argvOrPacket)) {
     if (!adapter) throw new Error("unknown member adapter: " + member);
     argv = adapter.argsFor(argvOrPacket, {
+      model: seat?.model,
       resume: opts.resume,
       persist: opts.persist,
       newId: opts.newId,
@@ -130,7 +138,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   }
 
   // Budget check before spawn
-  const used = runsToday(store, member);
+  const used = runsTodayForAccount(store, account);
   if (used >= ceiling) {
     const runId = randomUUID();
     const started = new Date().toISOString();
@@ -149,7 +157,8 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
     return { refused, runId, exit: null, stdout: "", stderr: "", timedOut: false, ms: 0 };
   }
 
-  const cli = resolveCli(member, opts);
+  if (process.env.COUNCIL_TEST_ONLY === "1" && !opts.fakePath) throw new Error("live providers disabled in test mode");
+  const cli = resolveCli(seat?.adapter || member, opts);
   if (!cli.found) {
     return { refused: `cli not found: ${member}`, exit: null, stdout: "", stderr: "", timedOut: false, ms: 0 };
   }

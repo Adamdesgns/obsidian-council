@@ -12,6 +12,9 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
     if (!envelope || typeof envelope !== "object") throw new Error("envelope required");
     const key = envelope.idempotency_key;
     if (!key) throw new Error("idempotency_key required");
+    if (envelope.sender === "engine" || /^delib(?:eration)?[:\-]/.test(String(key))) {
+      throw Object.assign(new Error("engine_envelope_reserved"), { statusCode: 400 });
+    }
 
     const recipients = normalizeRecipients(envelope);
     if (!recipients.length) throw new Error("at least one recipient required");
@@ -131,14 +134,15 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
       const nowIso = api.nowIso();
       const row = api.prepare(
         `SELECT * FROM deliveries
-         WHERE recipient = ?
+         WHERE recipient = ? AND (? IS NULL OR id = ?)
+           AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM deliberation_messages dm WHERE dm.message_id=deliveries.message_id))
            AND (
              status = 'pending'
              OR (status = 'leased' AND lease_until IS NOT NULL AND lease_until < ?)
            )
          ORDER BY id ASC
          LIMIT 1`
-      ).get(recipient, nowIso);
+      ).get(recipient, claimOpts.deliveryId ?? null, claimOpts.deliveryId ?? null, claimOpts.deliveryId ?? null, nowIso);
 
       if (!row) {
         api.setRef("deliveries", null, { recipient, empty: true });

@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { councilHome, ensureHome } from "./home.mjs";
 
-const MEMBERS = ["claude", "codex", "grok"];
+import { seatIds } from "./seats.mjs";
+const MEMBERS = seatIds();
 
 export function tokensPath(home = councilHome()) {
   return join(home, "tokens.json");
@@ -14,7 +15,14 @@ export function loadOrCreateTokens(home = councilHome()) {
   ensureHome(home);
   const path = tokensPath(home);
   if (existsSync(path)) {
-    return JSON.parse(readFileSync(path, "utf8"));
+    const tokens = JSON.parse(readFileSync(path, "utf8"));
+    tokens.members ||= {};
+    let changed = false;
+    for (const id of MEMBERS) if (!tokens.members[id]) {
+      tokens.members[id] = randomBytes(32).toString("hex"); changed = true;
+    }
+    if (changed) writeFileSync(path, JSON.stringify(tokens, null, 2) + "\n", {mode: 0o600});
+    return tokens;
   }
   const tokens = {
     owner: randomBytes(32).toString("hex"),

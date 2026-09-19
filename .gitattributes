@@ -1,0 +1,3 @@
+# Published planning artifacts must retain LF bytes across Windows checkouts.
+docs/planning/** text eol=lf
+docs/superpowers/** text eol=lf
