@@ -1835,7 +1835,7 @@ git commit -m "api: deliberation routes and the first real owner gate"
 
 ---
 
-## Task 14: Resume a stalled deliberation
+## Task 14: Resume a stalled deliberation — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Restore reads `stall_detail.from_state/from_round` first, inference (`!k.startsWith("__")`) as fallback; re-created packets use the engine sender rule, not `owner`; UPDATE guarded on `state='stalled'`. Task 15 (full-suite verification on Windows) remains for Adam's PC — Linux cannot run the three `taskkill` subtests.
 
 A stall that never resumes is just a slower abandon. The dispatcher tick re-checks
 stalled rows and puts them back on the floor once the member can run again.
@@ -1849,7 +1849,7 @@ stalled rows and puts them back on the floor once the member can run again.
 - Consumes: `preflight` (Task 7), `deliberationKey`/`blindPrompt` (Task 8)
 - Produces: `resumeStalled(store, outbox, {limits}) -> Array<{id, resumed}>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { stall, resumeStalled } from "../src/deliberation.mjs";
@@ -1918,12 +1918,12 @@ describe("resume after a stall", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — `resumeStalled is not a function`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/deliberation.mjs`:
 
@@ -1985,7 +1985,7 @@ export function resumeStalled(store, outbox, { limits }) {
 }
 ```
 
-- [ ] **Step 4: Call it from the tick**
+- [x] **Step 4: Call it from the tick**
 
 In `src/dispatcher.mjs`, in `tick()` immediately after the `if (isHalted())` block
 returns (so a HALTed council never resumes anything):
@@ -2002,12 +2002,12 @@ and extend the import:
 import { advanceOnReply, abandon, stall, resumeStalled, findDeliberationFor } from "./deliberation.mjs";
 ```
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `node --test`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/deliberation.mjs src/dispatcher.mjs test/deliberation.test.mjs
