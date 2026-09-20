@@ -9,7 +9,7 @@
   body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text); }
   header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); }
   header code { color:var(--muted); }
-  main { display:grid; grid-template-columns:220px 1fr 280px; min-height:calc(100vh - 52px); }
+  main { display:grid; grid-template-columns:220px 1fr 360px; min-height:calc(100vh - 52px); }
   aside, section { padding:12px; border-right:1px solid var(--line); background:var(--panel); }
   #floor { display:flex; flex-direction:column; background:var(--bg); }
   #log { flex:1; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; padding:8px; background:#0a0b0e; border:1px solid var(--line); border-radius:8px; }
@@ -24,6 +24,12 @@
   .pill.halt { background:#3a1e1e; color:var(--danger); }
   ul { list-style:none; padding:0; margin:0; }
   li { padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  textarea { width:100%; min-height:64px; resize:vertical; background:#1a1b21; color:var(--text); border:1px solid #333; padding:8px; border-radius:6px; font:inherit; }
+  .mono { white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  #delibStatus { padding:8px; background:#0a0b0e; border:1px solid var(--line); border-radius:8px; min-height:40px; margin-bottom:8px; }
+  #delibAnswers { max-height:320px; overflow:auto; margin-bottom:8px; }
+  #delibAnswers li { white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  [hidden] { display:none !important; }
 </style>
 </head>
 <body>
@@ -62,6 +68,25 @@
       <button id="approve">Approve</button>
       <button id="reject" class="danger">Reject</button>
     </div>
+    <h2 style="margin-top:16px">Deliberation</h2>
+    <div class="row">
+      <input id="delibQuestion" placeholder="one question for the deliberators" style="flex:1"/>
+      <button id="deliberate">Deliberate</button>
+    </div>
+    <div class="row">
+      <select id="delibSelect" style="flex:1"></select>
+    </div>
+    <div id="delibStatus" class="mono">No deliberation selected.</div>
+    <ul id="delibAnswers"></ul>
+    <div class="row">
+      <button id="delibApprove" hidden>Approve</button>
+    </div>
+    <div id="delibOverruleBox" hidden>
+      <textarea id="delibOverruleText" placeholder="your own answer (overrule)"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button id="delibOverrule" class="danger">Overrule</button>
+      </div>
+    </div>
     <h2 style="margin-top:16px">Members</h2>
     <ul id="members"></ul>
     <h2 style="margin-top:16px">HALT</h2>
@@ -95,8 +120,16 @@ async function api(path, opts = {}) {
   const res = await fetch(apiBase + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
   const text = await res.text();
   let json = null; try { json = JSON.parse(text); } catch {}
-  if (!res.ok) throw new Error((json && json.error) || text || res.status);
+  if (!res.ok) throw new Error((json && (json.error || describeRefusal(json))) || text || res.status);
   return json;
+}
+// Engine refusals come back as {ok:false, reason, ...} rather than {error}.
+function describeRefusal(j) {
+  if (!j || !j.reason) return "";
+  if (j.reason === "insufficient_budget") {
+    return `insufficient_budget: ${j.member} has ${j.remaining} run(s) left today on ${j.account}, needs ${j.needed}`;
+  }
+  return j.reason + (j.state ? " (" + j.state + ")" : "");
 }
 
 function line(s) { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
@@ -195,6 +228,169 @@ document.getElementById("reject").onclick = async () => {
 };
 document.getElementById("refresh").onclick = refresh;
 
+// --- Deliberation: one question -> one agreed answer, waiting in the Black Seat.
+// The engine (src/deliberation.mjs) owns every rule; this panel only calls
+// /owner/deliberate, polls the row, and lets the owner approve or overrule.
+// Model output is rendered with textContent only, never innerHTML.
+const DELIB_CLOSED = ["settled", "overruled", "abandoned"];
+let delibId = localStorage.getItem("council.deliberation") || "";
+let delibShown = null;      // the row as last rendered; approve sanctions exactly this
+let delibInFlight = false;
+let approveArmedAt = 0;
+
+function selectDeliberation(id) {
+  delibId = id || "";
+  localStorage.setItem("council.deliberation", delibId);
+  approveArmedAt = 0;
+  document.getElementById("delibApprove").textContent = "Approve";
+  return pollDeliberation();
+}
+document.getElementById("delibSelect").addEventListener("change", () => {
+  selectDeliberation(document.getElementById("delibSelect").value);
+});
+
+document.getElementById("deliberate").onclick = async () => {
+  if (delibInFlight) return;
+  const btn = document.getElementById("deliberate");
+  const content = document.getElementById("delibQuestion").value.trim();
+  chamberId = document.getElementById("chamberSelect").value || chamberId;
+  if (!content) return;
+  delibInFlight = true;
+  btn.disabled = true;
+  try {
+    // No deliberators sent: the server picks the seats whose role is "deliberator".
+    const r = await api("/owner/deliberate", { method: "POST", body: { chamber_id: chamberId, content } });
+    document.getElementById("delibQuestion").value = "";
+    line("deliberation " + r.id.slice(0, 8) + " opened (" + r.state + ")");
+    await selectDeliberation(r.id);
+  } catch (e) {
+    line("deliberate error: " + e.message);
+  } finally {
+    delibInFlight = false;
+    btn.disabled = false;
+  }
+  await refreshDeliberations();
+};
+
+function delibLabel(d) {
+  const q = String(d.question || "").replace(/\s+/g, " ");
+  const head = d.state + (d.flag ? "/" + d.flag : "");
+  return `[${head}] ${q.length > 60 ? q.slice(0, 57) + "…" : q}`;
+}
+
+async function refreshDeliberations() {
+  if (!token()) return;
+  try {
+    const r = await api("/owner/deliberations");
+    const rows = Array.isArray(r.deliberations) ? r.deliberations : [];
+    const sel = document.getElementById("delibSelect");
+    sel.innerHTML = "";
+    for (const d of rows) {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      opt.textContent = delibLabel(d);
+      if (d.id === delibId) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    if (!delibId && rows.length) await selectDeliberation(rows[0].id);
+  } catch (e) {
+    // The list is a convenience; pollDeliberation reports errors for the selected row.
+  }
+}
+
+function renderDeliberation(d) {
+  delibShown = d;
+  const lines = [
+    d.state + (d.flag ? " / " + d.flag : "") + (d.state === "debate" ? " (round " + d.round + ")" : ""),
+    "id: " + d.id,
+    "deliberators: " + (d.deliberators || []).join(", "),
+    "",
+    "Q: " + d.question,
+  ];
+  if (d.final_answer) lines.push("", "ANSWER:", d.final_answer);
+  const answers = d.answers || {};
+  if (d.state === "pending_owner" && !d.final_answer) {
+    lines.push("", d.flag === "escalated" && answers.__escalation
+      ? "ESCALATED by " + answers.__escalation.member + ": " + answers.__escalation.body
+      : "No agreed answer (" + d.flag + "). Write your own below to overrule.");
+  }
+  if (d.state === "stalled" && d.stall_detail) {
+    lines.push("", "stalled on " + (d.stall_detail.member || "?") + ": " + (d.stall_detail.reason || "run_failed")
+      + " — resumes on its own when the budget allows, or overrule now.");
+  }
+  document.getElementById("delibStatus").textContent = lines.join("\n");
+
+  const ul = document.getElementById("delibAnswers");
+  ul.innerHTML = "";
+  for (const h of Array.isArray(answers.__history) ? answers.__history : []) {
+    const li = document.createElement("li");
+    const where = h.state === "debate" ? "debate r" + h.round : h.state;
+    li.textContent = `[${where}] ${h.member}${h.verdict ? " → " + h.verdict + (h.malformed ? " (malformed)" : "") : ""}\n${h.text}`;
+    ul.appendChild(li);
+  }
+
+  const canApprove = d.state === "pending_owner" && !!d.final_answer;
+  document.getElementById("delibApprove").hidden = !canApprove;
+  document.getElementById("delibOverruleBox").hidden = DELIB_CLOSED.includes(d.state);
+  if (!canApprove) { approveArmedAt = 0; document.getElementById("delibApprove").textContent = "Approve"; }
+}
+
+async function pollDeliberation() {
+  if (!token() || !delibId) return;
+  try {
+    renderDeliberation(await api("/owner/deliberation/" + encodeURIComponent(delibId)));
+  } catch (e) {
+    document.getElementById("delibStatus").textContent = "deliberation error: " + e.message;
+  }
+}
+
+// Approve = sanction the exact answer on screen, then settle. Two clicks within
+// eight seconds, so a stray click cannot approve. The server derives the hash
+// from the content and consumes the sanction once (assertSanction + markUsed).
+document.getElementById("delibApprove").onclick = async () => {
+  const btn = document.getElementById("delibApprove");
+  const d = delibShown;
+  if (!d || d.id !== delibId || d.state !== "pending_owner" || !d.final_answer) return;
+  if (Date.now() - approveArmedAt > 8000) {
+    approveArmedAt = Date.now();
+    btn.textContent = "Click again to approve this answer";
+    return;
+  }
+  approveArmedAt = 0;
+  btn.textContent = "Approve";
+  btn.disabled = true;
+  try {
+    const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const san = await api("/owner/sanction", { method: "POST", body: { content: d.final_answer, expires_at } });
+    const r = await api("/owner/deliberation/" + encodeURIComponent(d.id) + "/approve", { method: "POST", body: {} });
+    line("deliberation " + d.id.slice(0, 8) + " " + r.state + " (sanction " + san.id.slice(0, 8) + ", hash " + r.content_hash.slice(0, 12) + ")");
+  } catch (e) {
+    line("approve error: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+  await pollDeliberation();
+  await refreshDeliberations();
+};
+
+document.getElementById("delibOverrule").onclick = async () => {
+  const content = document.getElementById("delibOverruleText").value.trim();
+  if (!content || !delibId) return;
+  const btn = document.getElementById("delibOverrule");
+  btn.disabled = true;
+  try {
+    const r = await api("/owner/deliberation/" + encodeURIComponent(delibId) + "/overrule", { method: "POST", body: { content } });
+    document.getElementById("delibOverruleText").value = "";
+    line("deliberation " + delibId.slice(0, 8) + " " + r.state + " (hash " + r.content_hash.slice(0, 12) + ")");
+  } catch (e) {
+    line("overrule error: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+  await pollDeliberation();
+  await refreshDeliberations();
+};
+
 function connectFloor() {
   if (es) try { es.close(); } catch {}
   if (!chamberId || !token()) return;
@@ -227,11 +423,14 @@ setInterval(async () => {
     document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
   } catch {}
   await pollMessages();
+  await refreshDeliberations();
+  await pollDeliberation();
 }, 3000);
 document.getElementById("chamberSelect").addEventListener("change", pollMessages);
 
 refresh();
-line("Floor ready. Paste owner token, create a chamber, summon, say.");
+refreshDeliberations();
+line("Floor ready. Paste owner token, create a chamber, summon, say — or ask one question under Deliberation.");
 </script>
 </body>
 </html>
