@@ -1028,7 +1028,7 @@ git commit -m "deliberation: start blind, deterministic keys, budget-gated"
 
 ---
 
-## Task 9: Advance the state machine on a reply
+## Task 9: Advance the state machine on a reply — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Deviations from the reference below, per Decision 2 / Task 12: engine packets carry the triggering member as `sender` (never `owner`) with `parent_id` set; replies are accepted only when the packet key `(state, round, member)` matches the row and the replier (stale/misrouted/duplicate replies write nothing); `ESCALATE` leaves `final_answer` NULL and records `answers.__escalation` (Task 13 must not hash-gate an escalation reason); `answers.__history` keeps every reply (Task 14: count answered members with `!k.startsWith("__")`, not `!== "__verdicts"`).
 
 **Files:**
 - Modify: `src/deliberation.mjs`
@@ -1038,7 +1038,7 @@ git commit -m "deliberation: start blind, deterministic keys, budget-gated"
 - Consumes: `parseVerdict` (Task 5), `deliberationKey`/`blindPrompt` (Task 8)
 - Produces: `findDeliberationFor(store, message) -> row|null`, `advanceOnReply(store, outbox, {message, member, text}) -> {state, round, flag}|null`, `abandon(store, id, reason)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { advanceOnReply, findDeliberationFor, abandon } from "../src/deliberation.mjs";
@@ -1142,12 +1142,12 @@ describe("advanceOnReply", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — `advanceOnReply is not a function`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/deliberation.mjs`:
 
@@ -1297,12 +1297,12 @@ function persist(store, id, patch) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/deliberation.mjs test/deliberation.test.mjs
