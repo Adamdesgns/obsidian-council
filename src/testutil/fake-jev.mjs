@@ -1,31 +1,44 @@
-// src/testutil/fake-jev.mjs — deterministic stand-in for the Jev typed-verdict client.
-//
-// The real client (not in this repo yet) would ask a typed model for a
-// TypedVerdict { verdict, confidence, reason }. This fake is in-memory only:
-// no network, no keys, no clock. Tests script it and inspect `calls`.
-//
-//   createFakeJev()                        -> always { responsive, 0.9, "fake:default" }
-//   createFakeJev({ script: [v1, v2] })    -> returns v1, v2, then throws "script exhausted"
-//   createFakeJev({ script: (req) => v })  -> computed per call
-//   createFakeJev({ mode: "malformed" })   -> returns an object that fails validation
-//   createFakeJev({ mode: "throw" })       -> rejects every call
-export function createFakeJev(opts = {}) {
-  const calls = [];
-  const script = opts.script;
-  const mode = opts.mode || "script";
-  let cursor = 0;
+// src/testutil/fake-jev.mjs — deterministic stand-in for the TypeSafe client.
+// Tests must never touch the network and must never need a key.
 
-  async function judge(req) {
-    calls.push({ question: req?.question, answer: req?.answer, screen: req?.screen ?? null });
-    if (mode === "throw") throw new Error(opts.error || "fake-jev: refused");
-    if (mode === "malformed") return opts.malformed ?? { verdict: "maybe", confidence: "high" };
-    if (typeof script === "function") return script(req, calls.length);
-    if (Array.isArray(script)) {
-      if (cursor >= script.length) throw new Error("fake-jev: script exhausted");
-      return script[cursor++];
-    }
-    return { verdict: "responsive", confidence: 0.9, reason: "fake:default" };
+/**
+ * @param {object} script  optional canned answers, keyed by a substring of state.reply
+ * @param {object} opts    { latencyMs, defaultDecision, defaultConfidence }
+ */
+export function createFakeJev(script = {}, opts = {}) {
+  const calls = [];
+  const latency = opts.latencyMs ?? 0;
+
+  async function evaluate({ model, state, questions }) {
+    calls.push({ model, state, questions });
+    if (latency) await new Promise((r) => setTimeout(r, latency));
+
+    const reply = String(state?.reply || "");
+    const hit = Object.keys(script).find((k) => reply.includes(k));
+    if (hit) return { model, ...script[hit] };
+
+    const decision = opts.defaultDecision || "UNCLEAR";
+    const confidence = opts.defaultConfidence ?? 0.4;
+    return {
+      model,
+      responsive: {
+        choice: decision,
+        confidence,
+        probabilities: { RESPONSIVE: 0.3, NOT_RESPONSIVE: 0.3, UNCLEAR: 0.4 },
+      },
+      cites_specifics: { probability: 0.5 },
+      claims_nothing_received: { probability: 0.1 },
+    };
   }
 
-  return { kind: "fake-jev", judge, calls };
+  return { evaluate, calls, callCount: () => calls.length };
+}
+
+/** Shape a real answer takes, for readability in tests. */
+export function answer(decision, confidence, extra = {}) {
+  return {
+    responsive: { choice: decision, confidence, probabilities: { [decision]: confidence } },
+    cites_specifics: { probability: extra.cites ?? 0.8 },
+    claims_nothing_received: { probability: extra.claimsNothing ?? 0.05 },
+  };
 }
