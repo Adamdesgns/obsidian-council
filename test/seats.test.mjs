@@ -1,13 +1,14 @@
 // test/seats.test.mjs — Deliberation Engine Task 1: seat resolution.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { seatOf, accountOf, seatIds, allSeats, setSeats } from "../src/seats.mjs";
 import { argsForSeat, adapterForSeat, resolveCli, spawnMember, runsTodayForAccount, ceilingFor, timeoutFor } from "../src/adapters/spawn.mjs";
 import { openStore } from "../src/store.mjs";
+import { loadOrCreateTokens, identityFromToken } from "../src/tokens.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const FAKE = join(ROOT, "src", "testutil", "fake-member.mjs");
@@ -219,5 +220,88 @@ describe("per-account ceilings", () => {
     const ok = await spawnMember(store, "codex", "hello", { fakePath: FAKE, limits, skipBuildVerify: true });
     assert.equal(ok.refused, undefined, JSON.stringify(ok));
     assert.equal(ok.exit, 0);
+  }));
+});
+
+describe("token backfill", () => {
+  function withHome(fn) {
+    const home = mkdtempSync(join(tmpdir(), "council-tok-"));
+    try { return fn(home); } finally { try { rmSync(home, { recursive: true, force: true }); } catch { /* */ } }
+  }
+
+  it("adds a token for a seat missing from an existing tokens.json", () => withHome((home) => {
+    writeFileSync(
+      join(home, "tokens.json"),
+      JSON.stringify({
+        owner: "o".repeat(64),
+        members: { codex: "c".repeat(64) },
+        created: "2026-01-01T00:00:00.000Z",
+      })
+    );
+    const t = loadOrCreateTokens(home);
+    assert.ok(t.members.fable, "fable must get a token");
+    assert.equal(t.members.codex, "c".repeat(64), "existing tokens must not change");
+    assert.equal(t.owner, "o".repeat(64), "owner token must not change");
+    assert.equal(t.created, "2026-01-01T00:00:00.000Z", "created must not change");
+    const onDisk = JSON.parse(readFileSync(join(home, "tokens.json"), "utf8"));
+    assert.ok(onDisk.members.fable, "backfill must persist");
+    assert.deepEqual(Object.keys(onDisk.members).sort(), ["claude", "codex", "fable", "grok"]);
+    assert.match(onDisk.members.fable, /^[0-9a-f]{64}$/);
+  }));
+
+  it("still creates a complete file on a fresh home", () => withHome((home) => {
+    const t = loadOrCreateTokens(home);
+    assert.ok(t.owner);
+    for (const id of ["codex", "fable", "claude", "grok"]) {
+      assert.ok(t.members[id], `${id} must have a token`);
+    }
+    assert.deepEqual(Object.keys(t.members).sort(), [...seatIds()].sort(), "one token per seat, no more");
+    const ids = new Set([t.owner, ...Object.values(t.members)]);
+    assert.equal(ids.size, 5, "every token is distinct");
+  }));
+
+  it("a backfilled seat resolves as a member identity, so the bridge can speak for it", () => withHome((home) => {
+    writeFileSync(join(home, "tokens.json"), JSON.stringify({ owner: "o".repeat(64), members: { codex: "c".repeat(64) } }));
+    const t = loadOrCreateTokens(home);
+    assert.deepEqual(identityFromToken(t, t.members.fable), { role: "member", member: "fable" });
+    assert.deepEqual(identityFromToken(t, t.owner), { role: "owner", member: "owner" });
+  }));
+
+  it("a complete file is not rewritten (no churn, mtime untouched)", () => withHome((home) => {
+    const first = loadOrCreateTokens(home);
+    const before = statSync(join(home, "tokens.json")).mtimeMs;
+    const raw = readFileSync(join(home, "tokens.json"), "utf8");
+    const again = loadOrCreateTokens(home);
+    assert.deepEqual(again, first);
+    assert.equal(readFileSync(join(home, "tokens.json"), "utf8"), raw);
+    assert.equal(statSync(join(home, "tokens.json")).mtimeMs, before);
+  }));
+
+  it("a missing owner token is minted; a missing members object is created", () => withHome((home) => {
+    writeFileSync(join(home, "tokens.json"), JSON.stringify({ created: "2026-01-01T00:00:00.000Z" }));
+    const t = loadOrCreateTokens(home);
+    assert.match(t.owner, /^[0-9a-f]{64}$/);
+    assert.equal(Object.keys(t.members).length, seatIds().length);
+  }));
+
+  it("a corrupt tokens.json is refused, never overwritten: the owner keeps their state and gets a clear error", () => withHome((home) => {
+    writeFileSync(join(home, "tokens.json"), "{ not json");
+    assert.throws(() => loadOrCreateTokens(home), /tokens\.json.*not valid JSON.*refusing/);
+    assert.equal(readFileSync(join(home, "tokens.json"), "utf8"), "{ not json", "file must be left as-is for the owner to inspect");
+    writeFileSync(join(home, "tokens.json"), JSON.stringify(["an", "array"]));
+    assert.throws(() => loadOrCreateTokens(home), /tokens\.json.*not an object.*refusing/);
+  }));
+
+  it("a seat added through setSeats is backfilled on the next load", () => withHome((home) => {
+    const t0 = loadOrCreateTokens(home);
+    assert.equal(t0.members.opus, undefined);
+    try {
+      setSeats({ opus: { adapter: "claude", model: "claude-opus-5", account: "anthropic", role: "arbiter" } });
+      const t1 = loadOrCreateTokens(home);
+      assert.match(t1.members.opus, /^[0-9a-f]{64}$/);
+      assert.equal(t1.members.codex, t0.members.codex, "existing tokens survive a seat table change");
+    } finally {
+      setSeats(null);
+    }
   }));
 });
