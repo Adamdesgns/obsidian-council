@@ -868,7 +868,7 @@ git commit -m "deliberation: preflight refuses before stranding a debate"
 
 ---
 
-## Task 8: Start a deliberation, blind
+## Task 8: Start a deliberation, blind — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Additions: distinct deliberators and a non-empty question are required (`duplicate_deliberator`, `empty_question`) before any write; `message_id` returned.
 
 **Files:**
 - Modify: `src/deliberation.mjs`
@@ -879,7 +879,7 @@ git commit -m "deliberation: preflight refuses before stranding a debate"
 - Produces: `startDeliberation(store, outbox, {chamber_id, question, deliberators, limits, category}) -> {ok, id, state} | {ok:false, reason,...}`
 - Produces: `deliberationKey(id, state, round, member) -> string` — the deterministic idempotency key
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { createOutbox } from "../src/outbox.mjs";
@@ -949,12 +949,12 @@ describe("startDeliberation", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — `startDeliberation is not a function`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/deliberation.mjs`:
 
@@ -1014,12 +1014,12 @@ export function startDeliberation(store, outbox, opts) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/deliberation.mjs test/deliberation.test.mjs
