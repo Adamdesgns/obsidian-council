@@ -1594,7 +1594,7 @@ git commit -m "dispatcher: advance deliberations on reply, failure, and HALT"
 
 ---
 
-## Task 12: Exempt deliberation sends from the reply caps
+## Task 12: Exempt deliberation sends from the reply caps — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). All four sites plus the owner-turn counter reset; `tick()` SELECT carries `m.idempotency_key`; `resolveChainState` stops at engine packets so an @name inside the question is never a relay.
 
 `max_auto_replies_per_owner_turn` is 4 (`dispatcher.mjs:39-40`), and a worst-case deliberation is 8 runs. Without this the engine dies at round 2. Worse, a tripped cap writes an event but never acks or expires the lease (`:203-218`), so the row stays selectable and re-logs `floor_returned` **every tick forever**, poisoning that chamber.
 
@@ -1615,7 +1615,7 @@ git commit -m "dispatcher: advance deliberations on reply, failure, and HALT"
 >
 > **Prerequisite:** PR #1 commits `floor_returned` *outside* the branch that actually suppresses the relay, so it fires even when nothing was truncated. That is a blocker fix required before merge (see the merge review). If it somehow ships unfixed, the `floor_returned === 0` assertion below fails spuriously and the bug is in the dispatcher, not in this task.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 it("survives three debate rounds without tripping the auto-reply cap", async () => {
@@ -1652,12 +1652,12 @@ it("survives three debate rounds without tripping the auto-reply cap", async () 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — `floor_returned` events present, state stuck in `debate`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add a helper near the top of `createDispatcher` in `src/dispatcher.mjs`:
 
@@ -1691,12 +1691,12 @@ if (!isDeliberationMessage(claimed.message)) {
 }
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `node --test`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/dispatcher.mjs test/deliberation.test.mjs
