@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store.mjs";
 import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt } from "../src/deliberation.mjs";
 import { createOutbox } from "../src/outbox.mjs";
+import { createDispatcher } from "../src/dispatcher.mjs";
 import { setSeats } from "../src/seats.mjs";
 import { spawnMember } from "../src/adapters/spawn.mjs";
 
@@ -617,4 +618,90 @@ describe("advanceOnReply", () => {
     ctx.store.prepare("UPDATE deliberations SET state = 'pending_owner' WHERE id = ?").run(ctx.id);
     assert.equal(abandon(ctx.store, ctx.id, "owner_cancel").changed, true);
   }));
+});
+
+describe("scriptedReply", () => {
+  const LIMITS = {
+    daily_ceiling: { codex: 100, fable: 100, anthropic: 100 },
+    timeout_ms: { codex: 3000, fable: 3000, fake: 3000 },
+    dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function waitFor(fn, { timeout = 6000, every = 40 } = {}) {
+    const deadline = Date.now() + timeout;
+    let last;
+    while (Date.now() < deadline) {
+      last = fn();
+      if (last) return last;
+      await sleep(every);
+    }
+    throw new Error("timeout; last=" + JSON.stringify(last));
+  }
+  async function withDispatcher(extra, fn) {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home, useFake: true, members: ["codex", "fable"], tickMs: 40, timeoutMs: 3000, defaultRespond: true, limits: LIMITS, ...extra,
+    });
+    try {
+      return await fn(d);
+    } finally {
+      try { await d.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
+  const replyFrom = (d, member) => d.store.prepare("SELECT * FROM messages WHERE sender = ? ORDER BY created DESC").get(member);
+
+  it("overrides the fake's reply text per member", async () => {
+    const seen = [];
+    await withDispatcher({ scriptedReply: (member) => { seen.push(member); return `AGREE: from ${member}`; } }, async (d) => {
+      d.outbox.send({ sender: "owner", recipients: ["codex"], chamber_id: "c1", kind: "say", content: "hi", idempotency_key: "k1" });
+      d.start();
+      const msg = await waitFor(() => replyFrom(d, "codex"));
+      assert.ok(seen.includes("codex"), "scriptedReply must be consulted");
+      assert.match(msg.content, /AGREE: from codex/);
+      assert.doesNotMatch(msg.content, /fake-ok/, "the fake's own text is replaced, not appended");
+    });
+  });
+
+  it("returning null falls through to the adapter's real finalText", async () => {
+    await withDispatcher({ scriptedReply: () => null }, async (d) => {
+      d.outbox.send({ sender: "owner", recipients: ["codex"], chamber_id: "c1", kind: "say", content: "hi", idempotency_key: "k1" });
+      d.start();
+      const msg = await waitFor(() => replyFrom(d, "codex"));
+      assert.match(msg.content, /fake-ok mode=echo/);
+    });
+  });
+
+  it("receives (member, claimed message, run result) so a script can vary by packet and round", async () => {
+    const calls = [];
+    await withDispatcher({
+      scriptedReply: (member, message, result) => {
+        calls.push({ member, key: message.idempotency_key, content: message.content, exit: result.exit, hasStdout: typeof result.stdout === "string" });
+        return message.idempotency_key === "k-fable" ? "DISAGREE: from fable" : "AGREE: from codex";
+      },
+    }, async (d) => {
+      d.outbox.send({ sender: "owner", recipients: ["codex"], chamber_id: "c1", kind: "deliberate", content: "packet one", idempotency_key: "k-codex" });
+      d.outbox.send({ sender: "owner", recipients: ["fable"], chamber_id: "c1", kind: "deliberate", content: "packet two", idempotency_key: "k-fable" });
+      d.start();
+      await waitFor(() => replyFrom(d, "codex") && replyFrom(d, "fable"));
+      const byMember = Object.fromEntries(calls.map((c) => [c.member, c]));
+      assert.deepEqual(byMember.codex, { member: "codex", key: "k-codex", content: "packet one", exit: 0, hasStdout: true });
+      assert.deepEqual(byMember.fable, { member: "fable", key: "k-fable", content: "packet two", exit: 0, hasStdout: true });
+      assert.match(replyFrom(d, "codex").content, /AGREE: from codex/);
+      assert.match(replyFrom(d, "fable").content, /DISAGREE: from fable/, "the fable seat runs through the fake and is scripted too");
+      // A real model run happened for each (the fake), recorded against the seat id.
+      const runs = d.store.prepare("SELECT member, exit FROM runs ORDER BY started").all().map((r) => [r.member, r.exit]).sort();
+      assert.deepEqual(runs, [["codex", 0], ["fable", 0]]);
+    });
+  });
+
+  it("without the seam, behaviour is unchanged", async () => {
+    await withDispatcher({}, async (d) => {
+      d.outbox.send({ sender: "owner", recipients: ["codex"], chamber_id: "c1", kind: "say", content: "hi", idempotency_key: "k1" });
+      d.start();
+      const msg = await waitFor(() => replyFrom(d, "codex"));
+      assert.match(msg.content, /fake-ok mode=echo/);
+    });
+  });
 });

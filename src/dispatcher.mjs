@@ -374,6 +374,13 @@ export function createDispatcher(opts = {}) {
       text = adapterForSeat(member).finalText(result) || "";
     } catch { text = ""; }
     if (!text) text = String(result && result.stdout || "").trim().slice(0, 4000);
+    // Test seam: a scripted reply lets a test drive verdict lines per member and per
+    // packet. opts.env cannot do this — it is fixed when the dispatcher is constructed.
+    // Returning null keeps the adapter's real text.
+    if (typeof opts.scriptedReply === "function") {
+      const scripted = opts.scriptedReply(member, message, result);
+      if (scripted != null) text = String(scripted);
+    }
     let outbound = [];
     try {
       const objs = JSON.parse(result.stdout);
