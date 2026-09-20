@@ -9,6 +9,7 @@ import { spawnMember, killTree as killTreeSync, adapterForSeat } from "./adapter
 import { buildPacket } from "./adapters/packet.mjs";
 import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/bridge-config.mjs";
 import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
+import { advanceOnReply, abandon, stall, findDeliberationFor } from "./deliberation.mjs";
 
 export { parseAddressChain };
 import { fileURLToPath } from "node:url";
@@ -163,6 +164,15 @@ export function createDispatcher(opts = {}) {
         }
         setPresence(k.split("::")[0], "blocked", "HALT");
       }
+      // HALT never enters runOne, so an in-flight deliberation would sit in
+      // `debate` (or `stalled`) forever without this sweep. HALT is the owner's
+      // stop: abandon, do not stall. Rows already with the owner are left alone.
+      try {
+        const open = store.prepare(
+          "SELECT id FROM deliberations WHERE state IN ('answer_1','answer_2','debate','stalled')"
+        ).all();
+        for (const row of open) abandon(store, row.id, "halt");
+      } catch { /* store may be closed */ }
       return;
     }
 
@@ -397,6 +407,23 @@ export function createDispatcher(opts = {}) {
     if (failReason) {
       stampBridgeAll(bridgeStatus, { fail: failReason });
       try { expireDeliveryLease(delivery.id, failReason, member); } catch { /* store may be closed after hardStop */ }
+      // Deliberation: stall, never abandon. Every failure stalls — nobody has yet
+      // seen what a CLI prints at a real usage limit, so isCeilingOrAuth's regex is
+      // not trusted to branch on. The raw signature is kept for the first time it
+      // happens. The lease above is already expired, so the packet is retried;
+      // if a retry succeeds, advanceOnReply resumes the row from stall_detail.
+      try {
+        const delib = findDeliberationFor(store, message);
+        if (delib) {
+          stall(store, delib.id, {
+            member,
+            reason: failReason,
+            exit: result?.exit ?? null,
+            stderr: String(result?.stderr || "").slice(0, 2000),
+            stdout: String(result?.stdout || "").slice(0, 2000),
+          });
+        }
+      } catch { /* never let cleanup mask the original failure */ }
       try {
         if (isCeilingOrAuth(failReason)) setPresence(member, "blocked", failReason);
         else setPresence(member, "idle");
@@ -534,6 +561,20 @@ export function createDispatcher(opts = {}) {
         idempotency_key: `disp:${member}:${message.id}:respond:${gen}`,
         advance_chain: advance || undefined,
       });
+    }
+
+    // Deliberation: advance the state machine on this member's reply. After the
+    // ack, so only a counted reply advances. Wrapped because runOne is
+    // fire-and-forget — an escaping throw becomes an unhandled rejection AND
+    // leaves presence stuck at "responding".
+    try {
+      advanceOnReply(store, outbox, { message, member, text });
+    } catch (e) {
+      try {
+        store.commit("deliberation_hook_failed", member, (api) => {
+          api.setRef("deliberations", null, { message_id: message.id, error: String(e?.message || e) });
+        });
+      } catch { /* store may be closed */ }
     }
 
     setPresence(member, "idle");

@@ -1,12 +1,12 @@
 // test/deliberation.test.mjs — Deliberation Engine Task 6: the deliberations table.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store.mjs";
-import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt } from "../src/deliberation.mjs";
+import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt, stall } from "../src/deliberation.mjs";
 import { createOutbox } from "../src/outbox.mjs";
 import { createDispatcher } from "../src/dispatcher.mjs";
 import { setSeats } from "../src/seats.mjs";
@@ -702,6 +702,198 @@ describe("scriptedReply", () => {
       d.start();
       const msg = await waitFor(() => replyFrom(d, "codex"));
       assert.match(msg.content, /fake-ok mode=echo/);
+    });
+  });
+});
+
+describe("dispatcher hooks", () => {
+  const LIMITS = {
+    daily_ceiling: { codex: 100, fable: 100, anthropic: 100 },
+    timeout_ms: { codex: 3000, fable: 3000, fake: 3000 },
+    dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function waitFor(fn, { timeout = 8000, every = 40, label = "condition" } = {}) {
+    const deadline = Date.now() + timeout;
+    let last;
+    while (Date.now() < deadline) {
+      last = fn();
+      if (last) return last;
+      await sleep(every);
+    }
+    throw new Error(`timeout waiting for ${label}; last=${JSON.stringify(last)}`);
+  }
+  async function withDispatcher(extra, fn) {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home, useFake: true, members: ["codex", "fable"], tickMs: 40, timeoutMs: 3000, defaultRespond: true, limits: LIMITS, ...extra,
+    });
+    try {
+      return await fn(d);
+    } finally {
+      try { await d.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
+  const rowOf = (d, id) => d.store.prepare("SELECT * FROM deliberations WHERE id = ?").get(id);
+  const start = (d, q = "cache the chain?") =>
+    startDeliberation(d.store, d.outbox, { chamber_id: "c1", question: q, deliberators: ["codex", "fable"], limits: LIMITS });
+
+  it("drives a whole deliberation to pending_owner on agreement", async () => {
+    const packets = [];
+    await withDispatcher({
+      scriptedReply: (member, message) => {
+        packets.push({ member, key: message.idempotency_key, content: message.content });
+        return /debate round/i.test(String(message?.content || "")) ? "looks right\nAGREE: cache it" : `my independent answer from ${member}`;
+      },
+    }, async (d) => {
+      const r = start(d);
+      d.start();
+      const row = await waitFor(() => { const x = rowOf(d, r.id); return x.state === "pending_owner" ? x : null; }, { label: "pending_owner" });
+      assert.equal(row.flag, "agreed");
+      assert.equal(row.final_answer, "cache it");
+      assert.equal(row.round, 1);
+
+      // Four runs, one per packet, in engine order; blindness held on the wire.
+      const keys = packets.map((p) => p.key);
+      assert.deepEqual(keys, [
+        deliberationKey(r.id, "answer_1", 0, "codex"),
+        deliberationKey(r.id, "answer_2", 0, "fable"),
+        deliberationKey(r.id, "debate", 1, "codex"),
+        deliberationKey(r.id, "debate", 1, "fable"),
+      ].slice(0, 2).concat(keys.slice(2).sort((a, b) => a.localeCompare(b))));
+      assert.equal(packets[1].content.includes("my independent answer from codex"), false, "fable's blind packet must not carry codex's answer");
+      assert.match(packets[2].content, /my independent answer from codex/);
+      assert.match(packets[2].content, /my independent answer from fable/);
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 4, "exactly 4 model runs for agreement in round 1");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE status = 'answered'").get().c, 4);
+      assert.equal(d.store.verifyChain().ok, true);
+      assert.equal(d.presence.codex.state, "idle");
+      assert.equal(d.presence.fable.state, "idle");
+    });
+  });
+
+  it("a failed run stalls the deliberation with the provider's own words, and the row keeps everything", async () => {
+    await withDispatcher({ env: { FAKE_MODE: "fail-nonzero" } }, async (d) => {
+      const r = start(d);
+      d.start();
+      const row = await waitFor(() => { const x = rowOf(d, r.id); return x.state === "stalled" ? x : null; }, { label: "stalled" });
+      assert.equal(row.flag, "exit_1");
+      const detail = JSON.parse(row.stall_detail);
+      assert.equal(detail.member, "codex");
+      assert.equal(detail.reason, "exit_1");
+      assert.equal(detail.exit, 1);
+      assert.match(detail.stderr, /bridge boom/, "provider stderr is kept verbatim");
+      assert.match(detail.stdout, /fail-nonzero/);
+      assert.equal(detail.from_state, "answer_1");
+      assert.equal(detail.from_round, 0);
+      assert.equal(row.question, "cache the chain?");
+      assert.deepEqual(JSON.parse(row.deliberators), ["codex", "fable"]);
+      const ev = d.store.getEvents().filter((e) => e.kind === "deliberation_stalled");
+      assert.ok(ev.length >= 1);
+      assert.equal(ev[0].actor, "codex");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM deliberations WHERE state = 'abandoned'").get().c, 0, "never abandoned on a run failure");
+    });
+  });
+
+  it("a budget refusal stalls too, and spends nothing", async () => {
+    // Dispatcher enforces codex: 0 while the deliberation was opened under generous limits.
+    const tight = { ...LIMITS, daily_ceiling: { codex: 0, fable: 100, anthropic: 100 } };
+    await withDispatcher({ limits: tight }, async (d) => {
+      const r = start(d);
+      d.start();
+      const row = await waitFor(() => { const x = rowOf(d, r.id); return x.state === "stalled" ? x : null; }, { label: "stalled on BUDGET" });
+      assert.match(row.flag, /^BUDGET: codex has used 0\/0/);
+      const spawned = d.store.prepare("SELECT COUNT(*) AS c FROM runs WHERE checkpoint IS NULL OR checkpoint NOT LIKE '%refused%'").get().c;
+      assert.equal(spawned, 0, "no process was spawned");
+      assert.equal(d.presence.codex.state, "blocked");
+    });
+  });
+
+  it("a stalled deliberation self-heals when the retried packet finally succeeds", () => withStore((store) => {
+    const outbox = createOutbox(store);
+    try {
+      const r = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+      const packet = store.prepare("SELECT * FROM messages").get();
+      stall(store, r.id, { member: "codex", reason: "exit_1", stderr: "usage limit reached", from_state: "answer_1", from_round: 0 });
+      assert.equal(rowOf({ store }, r.id).state, "stalled");
+      // The dispatcher keeps retrying the expired lease; one day the run succeeds.
+      const out = advanceOnReply(store, outbox, { message: packet, member: "codex", text: "A" });
+      assert.deepEqual(out, { state: "answer_2", round: 0, flag: null });
+      const row = rowOf({ store }, r.id);
+      assert.equal(row.state, "answer_2");
+      assert.equal(row.flag, null);
+      assert.equal(row.stall_detail, null, "the stall is cleared once the row moves on");
+      assert.equal(store.prepare("SELECT COUNT(*) AS c FROM messages").get().c, 2, "fable's blind packet went out");
+      // A reply for a state the row was NOT stalled in is still ignored.
+      stall(store, r.id, { member: "fable", reason: "exit_1", from_state: "answer_2", from_round: 0 });
+      assert.equal(advanceOnReply(store, outbox, { message: packet, member: "codex", text: "again" }), null);
+      assert.equal(rowOf({ store }, r.id).state, "stalled");
+    } finally { try { outbox.close(); } catch { /* */ } }
+  }));
+
+  it("stall only touches live rows and records from_state; abandon and stall are distinct events", () => withStore((store) => {
+    const outbox = createOutbox(store);
+    try {
+      const r = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+      const out = stall(store, r.id, { member: "codex", reason: "timed_out" });
+      assert.deepEqual(out, { id: r.id, stalled: true });
+      let row = rowOf({ store }, r.id);
+      assert.equal(row.state, "stalled");
+      assert.equal(row.flag, "timed_out");
+      const detail = JSON.parse(row.stall_detail);
+      assert.equal(detail.from_state, "answer_1", "from_state is filled in from the row when the caller omits it");
+      assert.equal(detail.from_round, 0);
+      // Stalling an already-stalled or closed row is a no-op.
+      assert.deepEqual(stall(store, r.id, { member: "codex", reason: "again" }), { id: r.id, stalled: false });
+      assert.equal(rowOf({ store }, r.id).flag, "timed_out");
+      store.prepare("UPDATE deliberations SET state = 'pending_owner', flag = 'agreed', stall_detail = NULL WHERE id = ?").run(r.id);
+      assert.equal(stall(store, r.id, { reason: "x" }).stalled, false);
+      row = rowOf({ store }, r.id);
+      assert.equal(row.state, "pending_owner");
+      assert.equal(row.stall_detail, null);
+      // Reason defaults; actor defaults to dispatcher.
+      store.prepare("UPDATE deliberations SET state = 'debate', round = 2 WHERE id = ?").run(r.id);
+      stall(store, r.id, {});
+      row = rowOf({ store }, r.id);
+      assert.equal(row.flag, "run_failed");
+      assert.equal(JSON.parse(row.stall_detail).from_round, 2);
+      const ev = store.getEvents().filter((e) => e.kind === "deliberation_stalled");
+      assert.equal(ev.at(-1).actor, "dispatcher");
+    } finally { try { outbox.close(); } catch { /* */ } }
+  }));
+
+  it("abandons an in-flight deliberation when HALT appears; stalled rows are abandoned too, closed rows are not", async () => {
+    await withDispatcher({}, async (d) => {
+      const live = start(d, "q1");
+      const stalled = start(d, "q2");
+      stall(d.store, stalled.id, { member: "codex", reason: "exit_1" });
+      const settled = start(d, "q3");
+      d.store.prepare("UPDATE deliberations SET state = 'pending_owner', flag = 'agreed' WHERE id = ?").run(settled.id);
+      writeFileSync(d.haltPath(), new Date().toISOString());
+      d.start();
+      const row = await waitFor(() => { const x = rowOf(d, live.id); return x.state === "abandoned" ? x : null; }, { label: "abandoned" });
+      assert.equal(row.flag, "halt");
+      assert.equal(rowOf(d, stalled.id).state, "abandoned", "HALT is the owner's stop; a stalled row is abandoned like a live one");
+      assert.equal(rowOf(d, settled.id).state, "pending_owner", "rows already with the owner are left alone");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 0, "HALT spends nothing");
+      const ev = d.store.getEvents().filter((e) => e.kind === "deliberation_abandoned");
+      assert.equal(ev.length, 2, "one event per abandoned row, not one per tick");
+    });
+  });
+
+  it("a throwing hook is recorded and never leaves presence stuck", async () => {
+    await withDispatcher({}, async (d) => {
+      start(d);
+      // Sabotage: the hook's lookup will throw "no such table"; the run itself is fine.
+      d.store.exec("ALTER TABLE deliberations RENAME TO deliberations_gone");
+      d.start();
+      const ev = await waitFor(() => d.store.getEvents().find((e) => e.kind === "deliberation_hook_failed"), { label: "hook_failed event" });
+      assert.match(JSON.parse(ev.payload).error, /no such table/);
+      assert.equal(ev.actor, "codex");
+      await waitFor(() => d.presence.codex.state === "idle", { label: "presence idle" });
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE status = 'answered'").get().c, 1, "the reply itself was still acked");
     });
   });
 });

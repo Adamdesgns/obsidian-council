@@ -160,7 +160,7 @@ export function debatePrompt(question, answers, round) {
 }
 
 const CLOSED = ["pending_owner", "settled", "overruled", "abandoned"];
-const PATCHABLE = new Set(["state", "round", "flag", "answers", "final_answer"]);
+const PATCHABLE = new Set(["state", "round", "flag", "answers", "final_answer", "stall_detail"]);
 
 function persist(store, id, patch) {
   return store.commit("deliberation_advanced", "dispatcher", (api) => {
@@ -194,7 +194,36 @@ function sendPacket(outbox, row, { to, from, parent, content, state, round }) {
   });
 }
 
-/** HALT or owner cancel. Never a run failure — those stall (Task 11/14). */
+const LIVE = ["answer_1", "answer_2", "debate"];
+
+/**
+ * Hold a deliberation intact after a failed run instead of destroying it.
+ *
+ * Every failure stalls, not just budget ones. A stall costs nothing to recover
+ * from and a wrong abandon costs every run already spent, so the asymmetry
+ * decides it. `detail` preserves the provider's own words for diagnosis, and
+ * from_state / from_round record where the row was so a later successful retry
+ * of the same packet (advanceOnReply) or resumeStalled (Task 14) can return it.
+ */
+export function stall(store, id, detail = {}) {
+  return store.commit("deliberation_stalled", detail?.member || "dispatcher", (api) => {
+    const row = api.prepare("SELECT state, round FROM deliberations WHERE id = ?").get(id);
+    if (!row || !LIVE.includes(row.state)) {
+      api.setRef("deliberations", id, { stalled: false, state: row?.state ?? null });
+      return { id, stalled: false };
+    }
+    const reason = String(detail?.reason || "run_failed");
+    const full = { ...detail, reason, from_state: detail.from_state ?? row.state, from_round: detail.from_round ?? row.round };
+    api.prepare(
+      `UPDATE deliberations SET state='stalled', flag=?, stall_detail=?, updated=?
+       WHERE id=? AND state IN ('answer_1','answer_2','debate')`
+    ).run(reason, JSON.stringify(full), api.nowIso(), id);
+    api.setRef("deliberations", id, { stalled: reason, member: detail?.member ?? null, from_state: full.from_state });
+    return { id, stalled: true };
+  }).result;
+}
+
+/** HALT or owner cancel. Never a run failure — those stall. */
 export function abandon(store, id, reason) {
   return store.commit("deliberation_abandoned", "dispatcher", (api) => {
     const info = api.prepare(
@@ -224,9 +253,18 @@ export function abandon(store, id, reason) {
 export function advanceOnReply(store, outbox, { message, member, text }) {
   const key = parseDeliberationKey(message?.idempotency_key);
   if (!key) return null;
-  const row = store.prepare("SELECT * FROM deliberations WHERE id = ?").get(key.id);
+  let row = store.prepare("SELECT * FROM deliberations WHERE id = ?").get(key.id);
   if (!row) return null;
-  if (CLOSED.includes(row.state) || row.state === "stalled") return null;
+  if (CLOSED.includes(row.state)) return null;
+  if (row.state === "stalled") {
+    // The dispatcher keeps retrying an expired lease on its own. If the packet
+    // the row stalled on finally succeeds, that reply resumes the row in place
+    // instead of being dropped. Anything else stays ignored until Task 14 resumes.
+    let detail = {};
+    try { detail = JSON.parse(row.stall_detail || "{}"); } catch { detail = {}; }
+    if (!LIVE.includes(detail.from_state) || key.state !== detail.from_state || key.round !== Number(detail.from_round)) return null;
+    row = { ...row, state: detail.from_state, round: Number(detail.from_round), flag: null, stall_detail: null, __resumed: true };
+  }
   if (key.member !== member || key.state !== row.state || key.round !== row.round) return null;
 
   const deliberators = JSON.parse(row.deliberators);
@@ -235,13 +273,15 @@ export function advanceOnReply(store, outbox, { message, member, text }) {
   const reply = String(text ?? "");
   const history = Array.isArray(answers.__history) ? answers.__history : [];
   const current = () => ({ state: row.state, round: row.round, flag: row.flag ?? null });
+  // Leaving a stall clears its marker; a caller's own flag (agreed/…) still wins.
+  const save = (patch) => persist(store, row.id, row.__resumed ? { flag: null, stall_detail: null, state: row.state, round: row.round, ...patch } : patch);
 
   // --- blind phase ---
   if (row.state === "answer_1") {
     if (member !== deliberators[0]) return null;
     answers[member] = reply;
     answers.__history = [...history, { state: "answer_1", round: 0, member, text: reply }];
-    persist(store, row.id, { state: "answer_2", answers });
+    save({ state: "answer_2", answers });
     // NOT debatePrompt — round one stays blind.
     sendPacket(outbox, row, { to: deliberators[1], from: member, parent: message, content: blindPrompt(row.question), state: "answer_2", round: 0 });
     return { state: "answer_2", round: 0, flag: null };
@@ -252,7 +292,7 @@ export function advanceOnReply(store, outbox, { message, member, text }) {
     answers[member] = reply;
     answers.__history = [...history, { state: "answer_2", round: 0, member, text: reply }];
     answers.__verdicts = {};
-    persist(store, row.id, { state: "debate", round: 1, answers });
+    save({ state: "debate", round: 1, answers });
     for (const m of deliberators) {
       sendPacket(outbox, row, { to: m, from: member, parent: message, content: debatePrompt(row.question, answers, 1), state: "debate", round: 1 });
     }
@@ -262,7 +302,12 @@ export function advanceOnReply(store, outbox, { message, member, text }) {
   // --- debate phase ---
   if (row.state !== "debate") return null;
   const verdicts = answers.__verdicts && typeof answers.__verdicts === "object" ? answers.__verdicts : {};
-  if (verdicts[member]) return current(); // duplicate reply this round: first verdict stands
+  if (verdicts[member]) {
+    // Duplicate reply this round: first verdict stands. Still un-stall if this
+    // was the retried packet the row stalled on.
+    if (row.__resumed) save({});
+    return current();
+  }
 
   const verdict = parseVerdict(reply);
   verdicts[member] = verdict.kind;
@@ -273,29 +318,29 @@ export function advanceOnReply(store, outbox, { message, member, text }) {
   if (verdict.kind === "ESCALATE") {
     // The reason is not an answer; the owner writes their own from the Black Seat.
     answers.__escalation = { member, body: verdict.body, round: row.round };
-    persist(store, row.id, { state: "pending_owner", flag: "escalated", answers, final_answer: null });
+    save({ state: "pending_owner", flag: "escalated", answers, final_answer: null });
     return { state: "pending_owner", round: row.round, flag: "escalated" };
   }
 
   const waiting = deliberators.filter((m) => !verdicts[m]);
   if (waiting.length) {
-    persist(store, row.id, { answers });
+    save({ answers });
     return { state: "debate", round: row.round, flag: null };
   }
 
   if (deliberators.every((m) => verdicts[m] === "AGREE")) {
-    persist(store, row.id, { state: "pending_owner", flag: "agreed", answers, final_answer: verdict.body });
+    save({ state: "pending_owner", flag: "agreed", answers, final_answer: verdict.body });
     return { state: "pending_owner", round: row.round, flag: "agreed" };
   }
 
   const next = row.round + 1;
   if (next > MAX_ROUNDS) {
-    persist(store, row.id, { state: "pending_owner", flag: "deadlock", answers });
+    save({ state: "pending_owner", flag: "deadlock", answers });
     return { state: "pending_owner", round: row.round, flag: "deadlock" };
   }
 
   answers.__verdicts = {}; // fresh verdicts each round
-  persist(store, row.id, { state: "debate", round: next, answers });
+  save({ state: "debate", round: next, answers });
   for (const m of deliberators) {
     sendPacket(outbox, row, { to: m, from: member, parent: message, content: debatePrompt(row.question, answers, next), state: "debate", round: next });
   }
