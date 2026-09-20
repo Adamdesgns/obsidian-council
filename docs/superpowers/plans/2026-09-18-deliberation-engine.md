@@ -580,7 +580,7 @@ git commit -m "tokens: backfill seats added after first run"
 
 ---
 
-## Task 5: The verdict parser
+## Task 5: The verdict parser — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Additions: an `AGREE:` with an empty body is not accepted (the last clean line wins), CRLF trimmed, matched `line` returned for the record; `VERDICT_KINDS` exported.
 
 **Files:**
 - Create: `src/verdict.mjs`
@@ -589,7 +589,7 @@ git commit -m "tokens: backfill seats added after first run"
 **Interfaces:**
 - Produces: `parseVerdict(text) -> {kind: "AGREE"|"DISAGREE"|"ESCALATE", body: string, malformed: boolean}`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 // test/verdict.test.mjs
@@ -634,12 +634,12 @@ describe("parseVerdict", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/verdict.test.mjs`
 Expected: FAIL — `Cannot find module '../src/verdict.mjs'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```js
 // src/verdict.mjs — read a deliberator's closing verdict line.
@@ -660,12 +660,12 @@ export function parseVerdict(text) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/verdict.test.mjs`
 Expected: PASS, 6 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/verdict.mjs test/verdict.test.mjs
