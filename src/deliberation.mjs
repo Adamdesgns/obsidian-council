@@ -44,3 +44,75 @@ export function preflight(store, { deliberators, limits } = {}) {
   }
   return { ok: true };
 }
+
+/**
+ * Deterministic. NOT derived from Date.now() or the claim generation —
+ * both of those produce duplicate or colliding keys on retry. The same
+ * (deliberation, state, round, member) always yields the same key, so a
+ * re-send after a crash or a resume is a no-op in the outbox.
+ */
+export function deliberationKey(id, state, round, member) {
+  return `delib:${id}:${state}:${round}:${member}`;
+}
+
+/** Round one sees the question and nothing else. This is the whole point. */
+export function blindPrompt(question) {
+  return [
+    "You are answering a Council question independently.",
+    "No other member's answer is available to you, by design.",
+    "Answer in your own words.",
+    "",
+    "QUESTION:",
+    question,
+  ].join("\n");
+}
+
+/**
+ * Open a deliberation: preflight the budget, persist the row in answer_1, then
+ * ask the FIRST deliberator with a packet that holds only the question.
+ *
+ * Two commits, row first: outbox.send() commits on its own and store.commit
+ * cannot nest. A crash between them leaves a row in answer_1 with no delivery;
+ * the deterministic key lets a resume re-send without duplicating.
+ *
+ * @returns {{ok: true, id: string, state: "answer_1", message_id: string} | {ok: false, reason: string}}
+ */
+export function startDeliberation(store, outbox, opts = {}) {
+  const { chamber_id = null, deliberators, limits, category = null } = opts;
+  const question = typeof opts.question === "string" ? opts.question.trim() : "";
+
+  if (!Array.isArray(deliberators) || deliberators.length !== 2) {
+    return { ok: false, reason: "need_exactly_two_deliberators" };
+  }
+  if (deliberators[0] === deliberators[1]) {
+    return { ok: false, reason: "duplicate_deliberator", member: deliberators[0] };
+  }
+  if (!question) return { ok: false, reason: "empty_question" };
+
+  const pre = preflight(store, { deliberators, limits });
+  if (!pre.ok) return pre;
+
+  const committed = store.commit("deliberation_started", "owner", (api) => {
+    const id = api.uuid();
+    const now = api.nowIso();
+    api.prepare(
+      `INSERT INTO deliberations(id, chamber_id, question, category, state, round, deliberators, answers, created, updated)
+       VALUES(?,?,?,?,?,?,?,?,?,?)`
+    ).run(id, chamber_id, question, category, "answer_1", 0,
+      JSON.stringify(deliberators), JSON.stringify({}), now, now);
+    api.setRef("deliberations", id, { state: "answer_1", deliberators });
+    return { id };
+  });
+
+  const id = committed.result.id;
+  const sent = outbox.send({
+    sender: "owner",
+    recipients: [deliberators[0]],
+    chamber_id,
+    kind: "deliberate",
+    content: blindPrompt(question),
+    idempotency_key: deliberationKey(id, "answer_1", 0, deliberators[0]),
+  });
+
+  return { ok: true, id, state: "answer_1", message_id: sent.message.id };
+}
