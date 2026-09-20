@@ -1311,7 +1311,7 @@ git commit -m "deliberation: blind round one, verdict-driven debate, three-round
 
 ---
 
-## Task 10: Script the fake member's reply
+## Task 10: Script the fake member's reply — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`).
 
 The fake emits only `fake-ok mode=<mode> bytes=<n>` (`fake-member.mjs:47-55`) and `opts.env` is fixed at construction, so no env var can vary a reply per round. A callback is the only mechanism that can.
 
@@ -1322,7 +1322,7 @@ The fake emits only `fake-ok mode=<mode> bytes=<n>` (`fake-member.mjs:47-55`) an
 **Interfaces:**
 - Produces: `createDispatcher({scriptedReply})` where `scriptedReply(member, message, result) -> string|null`; returning `null` falls through to the adapter's real `finalText`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { createDispatcher } from "../src/dispatcher.mjs";
@@ -1366,12 +1366,12 @@ describe("scriptedReply", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — the message content is `fake-ok mode=...`, not `AGREE: from codex`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/dispatcher.mjs`, at the point where the final text is derived (`:383`, already changed in Task 2 to use `adapterForSeat`):
 
@@ -1385,12 +1385,12 @@ if (typeof opts.scriptedReply === "function") {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/dispatcher.mjs test/deliberation.test.mjs
