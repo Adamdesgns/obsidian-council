@@ -897,3 +897,113 @@ describe("dispatcher hooks", () => {
     });
   });
 });
+
+describe("cap exemption for engine traffic", () => {
+  const LIMITS = {
+    daily_ceiling: { codex: 100, fable: 100, anthropic: 100 },
+    timeout_ms: { codex: 3000, fable: 3000, fake: 3000 },
+    dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function waitFor(fn, { timeout = 10000, every = 40, label = "condition" } = {}) {
+    const deadline = Date.now() + timeout;
+    let last;
+    while (Date.now() < deadline) {
+      last = fn();
+      if (last) return last;
+      await sleep(every);
+    }
+    throw new Error(`timeout waiting for ${label}; last=${JSON.stringify(last)}`);
+  }
+  async function withDispatcher(extra, fn) {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home, useFake: true, members: ["codex", "fable"], tickMs: 40, timeoutMs: 3000, defaultRespond: true, limits: LIMITS, ...extra,
+    });
+    try {
+      return await fn(d);
+    } finally {
+      try { await d.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
+  const rowOf = (d, id) => d.store.prepare("SELECT * FROM deliberations WHERE id = ?").get(id);
+  const floorReturned = (d) => d.store.prepare("SELECT COUNT(*) AS c FROM events WHERE kind = 'floor_returned'").get().c;
+  const settled = (d, id) => () => { const x = rowOf(d, id); return x.state === "pending_owner" ? x : null; };
+
+  it("survives three debate rounds without tripping the auto-reply cap", async () => {
+    let round = 0;
+    await withDispatcher({
+      scriptedReply: (member, message) => {
+        const c = String(message?.content || "");
+        if (!/debate round/i.test(c)) return `answer from ${member}`;
+        round++;
+        return round > 4 ? "AGREE: settled late" : "DISAGREE: not yet";
+      },
+    }, async (d) => {
+      const r = startDeliberation(d.store, d.outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+      d.start();
+      const row = await waitFor(settled(d, r.id), { label: "pending_owner after three rounds" });
+      assert.equal(row.flag, "agreed");
+      assert.equal(row.round, 3);
+      assert.equal(row.final_answer, "settled late");
+      assert.equal(floorReturned(d), 0, "no cap refusals during a deliberation");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 8, "the spec's ceiling: 1+1+2+2+2");
+    });
+  });
+
+  it("a full deadlock is the 8-run worst case, delivered cleanly", async () => {
+    await withDispatcher({
+      scriptedReply: (member, message) => (/debate round/i.test(String(message?.content || "")) ? "DISAGREE: never" : `answer from ${member}`),
+    }, async (d) => {
+      const r = startDeliberation(d.store, d.outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+      d.start();
+      const row = await waitFor(settled(d, r.id), { label: "deadlock" });
+      assert.equal(row.flag, "deadlock");
+      assert.equal(row.round, 3);
+      assert.equal(floorReturned(d), 0);
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 8);
+      assert.equal(
+        d.store.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE recipient IN ('codex','fable') AND status <> 'answered'").get().c,
+        0, "every engine delivery acked; none left selectable to re-log every tick"
+      );
+      assert.equal(
+        d.store.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE recipient = 'owner'").get().c,
+        8, "defaultRespond still echoes each raw reply to the owner (plan self-review gap, Floor task)"
+      );
+      assert.equal(d.store.verifyChain().ok, true);
+    });
+  });
+
+  it("an @mention inside the question never becomes a chain relay", async () => {
+    await withDispatcher({
+      scriptedReply: (member, message) => (/debate round/i.test(String(message?.content || "")) ? "AGREE: yes" : `answer from ${member}`),
+    }, async (d) => {
+      const r = startDeliberation(d.store, d.outbox, {
+        chamber_id: "c1", question: "should @fable own the cache, or @codex? ask @grok too", deliberators: ["codex", "fable"], limits: LIMITS,
+      });
+      d.start();
+      const row = await waitFor(settled(d, r.id), { label: "agreed" });
+      assert.equal(row.flag, "agreed");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM messages WHERE kind = 'relay'").get().c, 0, "no relay kind produced from a deliberation reply");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE recipient = 'grok'").get().c, 0, "@grok in the question is text, not a route");
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 4);
+      assert.equal(floorReturned(d), 0);
+    });
+  });
+
+  it("ordinary member chatter in the same chamber is still capped", async () => {
+    // A member->member ask loop must still hit the auto-reply cap: the
+    // exemption is keyed on the delib: idempotency key, not on the chamber.
+    await withDispatcher({
+      scriptedOutbound: (member) => [{ kind: "ask", recipient: member === "codex" ? "fable" : "codex", content: "and you?" }],
+    }, async (d) => {
+      d.outbox.send({ sender: "owner", recipients: ["codex"], chamber_id: "c1", kind: "say", content: "start a loop", idempotency_key: "loop-1" });
+      d.start();
+      await waitFor(() => floorReturned(d) > 0, { label: "a cap refusal for plain chatter" });
+      const runs = d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c;
+      assert.ok(runs <= 1 + LIMITS.dispatcher.max_auto_replies_per_owner_turn + 2, `bounded runs, got ${runs}`);
+    });
+  });
+});

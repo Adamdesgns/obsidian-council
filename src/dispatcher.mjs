@@ -40,6 +40,20 @@ export function createDispatcher(opts = {}) {
     return join(home, "HALT");
   }
 
+  /**
+   * Engine-issued deliberation traffic is exempt from the conversational caps
+   * and from chain resolution. The caps exist to stop members chatting in a
+   * loop; a deliberation is already bounded by MAX_ROUNDS and by the preflight
+   * budget check. An @name inside the owner's question is text, not a route.
+   *
+   * We do NOT stamp these sends as sender:"owner" to dodge the caps — that would
+   * put the owner's name on machine-generated packets in the hash chain.
+   */
+  function isDeliberationMessage(message) {
+    return typeof message?.idempotency_key === "string"
+      && message.idempotency_key.startsWith("delib:");
+  }
+
   function isHalted() {
     return existsSync(haltPath());
   }
@@ -179,7 +193,7 @@ export function createDispatcher(opts = {}) {
     for (const member of members) {
       // Find chambers with pending work and no active run
       const pending = store.prepare(
-        `SELECT d.*, m.chamber_id, m.kind AS msg_kind, m.content, m.sender, m.id AS message_id
+        `SELECT d.*, m.chamber_id, m.kind AS msg_kind, m.content, m.sender, m.id AS message_id, m.idempotency_key
          FROM deliveries d JOIN messages m ON m.id = d.message_id
          WHERE d.recipient = ? AND (
            d.status = 'pending'
@@ -199,15 +213,20 @@ export function createDispatcher(opts = {}) {
         // produced by hop <= maxHops may still be consumed (its reply returns
         // to the owner), so a chain with exactly maxHops member hops completes.
         // Initiating hops beyond the cap is blocked at send time in runOne.
+        // Engine packets (delib:*) are invisible to the caps: no refusal, no
+        // owner-turn reset, no count.
+        const exempt = isDeliberationMessage(row);
         const hops = hopCount.get(chamber) || 0;
-        if (hops > maxHops && row.sender !== "owner") {
+        if (!exempt && hops > maxHops && row.sender !== "owner") {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "hop_cap", chamber });
           });
           continue;
         }
         const autos = autoReplies.get(chamber) || 0;
-        if (row.sender === "owner") {
+        if (exempt) {
+          /* leave the chamber's conversational counters as they are */
+        } else if (row.sender === "owner") {
           autoReplies.set(chamber, 0);
           hopCount.set(chamber, 0);
         } else if (autos >= maxAuto) {
@@ -457,6 +476,7 @@ export function createDispatcher(opts = {}) {
       });
     }
 
+    const exemptMessage = isDeliberationMessage(message);
     for (const out of outbound) {
       let recipients = out.recipients || (out.recipient ? [out.recipient] : ["owner"]);
       const memberDirected = recipients.some((r) => r && r !== "owner");
@@ -480,7 +500,7 @@ export function createDispatcher(opts = {}) {
           });
         }
       }
-      if (message.sender !== "owner") {
+      if (message.sender !== "owner" && !exemptMessage) {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
       outbox.send({
@@ -500,6 +520,9 @@ export function createDispatcher(opts = {}) {
       const seen = new Set();
       while (cur && !seen.has(cur.id)) {
         seen.add(cur.id);
+        // Engine packets are not chain roots and are never relayed: an @name in
+        // the owner's question is text. Stop the walk here.
+        if (isDeliberationMessage(cur)) return null;
         let chain = cur.chain;
         if (typeof chain === "string" && chain) {
           try { chain = JSON.parse(chain); } catch { chain = null; }
@@ -539,18 +562,18 @@ export function createDispatcher(opts = {}) {
       // only here can one be suppressed: when the member's own outbound already
       // answered (loop above), or defaultRespond is off, nothing is truncated
       // and no floor_returned is recorded.
-      if (chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
+      if (!exemptMessage && chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
         store.commit("floor_returned", member, (api) => {
           api.setRef("messages", message.id, { reason: "hop_cap", chamber, truncated_next: chainNext });
         });
         chainNext = null;
         advance = null;
       }
-      if (message.sender !== "owner") {
+      if (message.sender !== "owner" && !exemptMessage) {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
       const recipients = chainNext ? [chainNext] : ["owner"];
-      if (chainNext) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
+      if (chainNext && !exemptMessage) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
       outbox.send({
         sender: member,
         recipients,
