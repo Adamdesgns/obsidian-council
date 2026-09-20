@@ -192,7 +192,7 @@ git commit -m "seats: a member is an (adapter, model, account) triple"
 
 ---
 
-## Task 2: Spawn through the seat resolver
+## Task 2: Spawn through the seat resolver — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`; Step 5b consumer flip deferred to Task 3, see below)
 
 **Files:**
 - Modify: `src/adapters/spawn.mjs:12` (ADAPTERS), `:60-95` (resolveCli), `:118-131` (lookup + argsFor)
@@ -203,7 +203,7 @@ git commit -m "seats: a member is an (adapter, model, account) triple"
 - Consumes: `seatOf(id)` from Task 1
 - Produces: a `fable` member that spawns the `claude` CLI with `--model claude-fable-5-1`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `test/seats.test.mjs`:
 
@@ -230,12 +230,12 @@ describe("spawn via seats", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/seats.test.mjs`
 Expected: FAIL — `argsForSeat is not a function`
 
-- [ ] **Step 3: Add the resolver to spawn.mjs**
+- [x] **Step 3: Add the resolver to spawn.mjs**
 
 Replace the ADAPTERS constant at `src/adapters/spawn.mjs:12` and add the exported helper:
 
@@ -262,7 +262,7 @@ export function argsForSeat(id, packet, opts = {}) {
 }
 ```
 
-- [ ] **Step 4: Point the existing lookup at it**
+- [x] **Step 4: Point the existing lookup at it**
 
 At `src/adapters/spawn.mjs:118-122`, replace the direct `ADAPTERS[member]` lookup with `adapterForSeat(member)`, and replace the `adapter.argsFor(argvOrPacket, {...})` call at `:120-131` with `argsForSeat(member, argvOrPacket, {...})`, keeping the existing options object unchanged.
 
@@ -276,7 +276,7 @@ import { adapterForSeat } from "./adapters/spawn.mjs";
 const text = adapterForSeat(member).finalText(result);
 ```
 
-- [ ] **Step 5: Allow @fable in address chains**
+- [x] **Step 5: Allow @fable in address chains**
 
 > **This step targets `src/routing.mjs`, which exists only after PR #1 is merged.** PR #1 collapses three separate `@mention` parsers into that one file. Do not start this plan until it has landed — patching the dispatcher's copy while the Floor still client-parses would make `@fable` work in tests and silently bypass the chain contract in the real UI.
 
@@ -305,7 +305,7 @@ export function parseAddressChain(text) {
 
 `src/dispatcher.mjs` re-exports `parseAddressChain` from `routing.mjs` on the PR head, so existing test imports keep working and the `dispatcher.mjs:482` fallback re-parse inherits the fix automatically.
 
-- [ ] **Step 5b: Derive the broadcast default from roles**
+- [x] **Step 5b: Derive the broadcast default from roles** — `defaultBroadcast()` landed and tested; the `routeOwnerSay` consumer is **deliberately still `DEFAULT_BROADCAST` (codex+grok)** until Task 3. Reason: `council.mjs` runs the dispatcher for codex/grok/claude, so a fable delivery today is a dead letter (the exact defect Step 5 describes), and fable has no daily ceiling until Task 3 keys ceilings by account. PR #1 also pinned codex+grok in `test/chain-routing.http.test.mjs` (d)/(e) to protect the anthropic budget. **Task 3 must flip the consumer and update those two assertions.**
 
 `src/routing.mjs:16` hardcodes `DEFAULT_BROADCAST = ["codex", "grok"]`. Under the seat table that is wrong — `grok` is an executor, not a deliberator. Replace it:
 
@@ -320,12 +320,12 @@ export function defaultBroadcast() {
 
 Update the single consumer in `routeOwnerSay` from `[...DEFAULT_BROADCAST]` to `defaultBroadcast()`.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `node --test`
 Expected: PASS — all pre-existing tests still green, plus 8 in `test/seats.test.mjs`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/adapters/spawn.mjs src/dispatcher.mjs test/seats.test.mjs
