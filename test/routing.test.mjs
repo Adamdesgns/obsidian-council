@@ -2,8 +2,9 @@
 // Pure: no DB, no HTTP. The HTTP-level chain contract is test/chain-routing.http.test.mjs.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseAddressChain, routeOwnerSay, defaultBroadcast, DEFAULT_BROADCAST } from "../src/routing.mjs";
+import { parseAddressChain, routeOwnerSay, defaultBroadcast } from "../src/routing.mjs";
 import { setSeats, seatIds } from "../src/seats.mjs";
+import { defaultMembers } from "../src/council.mjs";
 
 function stubOutbox() {
   const sent = [];
@@ -66,15 +67,37 @@ describe("routing: broadcast default (Step 5b)", () => {
     }
   });
 
-  it("(b) until Task 3 lands per-account ceilings, unaddressed owner lines still go to DEFAULT_BROADCAST (codex+grok)", () => {
-    // Deliberately NOT defaultBroadcast() yet: the running dispatcher serves
-    // codex/grok/claude (council.mjs), so a fable delivery would be a dead
-    // letter, and fable has no ceiling until Task 3. PR #1 pinned this in
-    // test/chain-routing.http.test.mjs (d)/(e). Flip both when Task 3 lands.
-    assert.deepEqual(DEFAULT_BROADCAST, ["codex", "grok"]);
+  it("(b) unaddressed owner lines go to the deliberators (Task 3 flipped the consumer); executors and the arbiter only when addressed", () => {
     const outbox = stubOutbox();
     routeOwnerSay(outbox, { content: "status check please" });
-    assert.deepEqual(outbox.sent[0].recipients, ["codex", "grok"]);
+    assert.deepEqual(outbox.sent[0].recipients, ["codex", "fable"]);
     assert.equal(outbox.sent[0].chain, undefined);
+    routeOwnerSay(outbox, { content: "@grok ship it" });
+    assert.deepEqual(outbox.sent[1].recipients, ["grok"]);
+    routeOwnerSay(outbox, { content: "@claude rule on this" });
+    assert.deepEqual(outbox.sent[2].recipients, ["claude"]);
+  });
+
+  it("(c) the default follows the seat table, so a role change re-routes without a code edit", () => {
+    try {
+      setSeats({
+        codex: { adapter: "codex", model: null, account: "codex", role: "deliberator" },
+        grok: { adapter: "grok", model: null, account: "grok", role: "deliberator" },
+      });
+      const outbox = stubOutbox();
+      routeOwnerSay(outbox, { content: "status check please" });
+      assert.deepEqual(outbox.sent[0].recipients, ["codex", "grok"]);
+    } finally {
+      setSeats(null);
+    }
+  });
+
+  it("(d) the council entry point runs a dispatcher seat for every seat, so no default recipient is a dead letter", () => {
+    // Guards the Step 5 rationale: a delivery to a seat the dispatcher does not
+    // loop can never be claimed. council.mjs must derive its member list from
+    // the same table routing uses.
+    const members = defaultMembers();
+    for (const id of defaultBroadcast()) assert.ok(members.includes(id), id);
+    assert.deepEqual([...members].sort(), [...seatIds()].sort());
   });
 });

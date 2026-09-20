@@ -15,20 +15,18 @@
 //     deliver the root to a seat with no runner (HTTP 200, zero runs) and made
 //     "@codex ... @owner ... @grok" relay into the void before grok ran.
 //   - No chain + explicit recipients -> those recipients, verbatim.
-//   - No chain + no recipients -> DEFAULT_BROADCAST (codex+grok; claude's
-//     smaller daily ceiling is only spent when claude is addressed).
+//   - No chain + no recipients -> defaultBroadcast(): the seats whose role is
+//     deliberator (codex+fable today). Executors (grok) and the arbiter
+//     (claude) only speak when addressed, so their quotas are not spent on
+//     unaddressed lines. fable shares claude's anthropic ceiling (spawn.mjs).
 //   - The routable set is the seat table (seats.mjs), so a new seat such as
 //     @fable is routable without touching this file.
 import { seatIds, allSeats } from "./seats.mjs";
 
-export const DEFAULT_BROADCAST = ["codex", "grok"];
-
 /**
- * Deliberation Engine Task 2 Step 5b: unaddressed owner messages belong to the
- * deliberators, never the executors. NOT yet wired into routeOwnerSay: the
- * dispatcher in council.mjs serves codex/grok/claude, so a fable delivery today
- * would be a dead letter, and fable has no daily ceiling until Task 3 keys
- * ceilings by account. Switch the consumer below when Task 3 lands.
+ * Unaddressed owner messages go to the deliberators, never the executors.
+ * council.mjs runs a dispatcher seat for every seat, so nothing returned here
+ * can be a dead letter.
  */
 export function defaultBroadcast() {
   return allSeats().filter((s) => s.role === "deliberator").map((s) => s.id);
@@ -64,7 +62,7 @@ export function routeOwnerSay(outbox, envelope = {}) {
     ? [chain[0]]
     : supplied.length
       ? supplied
-      : [...DEFAULT_BROADCAST];
+      : defaultBroadcast();
   return outbox.send({
     ...envelope,
     sender: "owner",
