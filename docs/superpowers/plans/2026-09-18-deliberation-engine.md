@@ -1705,7 +1705,7 @@ git commit -m "dispatcher: exempt deliberation traffic from conversational caps"
 
 ---
 
-## Task 13: Wire the owner gate
+## Task 13: Wire the owner gate — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Additions: `approve` requires `pending_owner` and a non-null `final_answer` (escalated/deadlock rows return 409 `no_answer_to_approve`; overrule instead); `overrule` requires content and refuses closed rows; `/owner/deliberate` maps validation to 400 and budget to 409; deliberators default to `defaultBroadcast()`; `GET` parses the JSON columns.
 
 `assertSanction` has **zero call sites** outside its own test. `POST /owner/sanction` (`api.mjs:350-372`) stores `body.content_hash` verbatim and never imports `contentHash`, so the server has never verified that a hash matches what it is approving. `markUsed` is never called, so `used_at` is always NULL.
 
@@ -1717,7 +1717,7 @@ git commit -m "dispatcher: exempt deliberation traffic from conversational caps"
 - Consumes: `contentHash`, `assertSanction`, `markUsed` (`src/sanctions.mjs`)
 - Produces: `POST /owner/deliberate`, `GET /owner/deliberation/<id>`, `POST /owner/deliberation/<id>/approve`, `POST /owner/deliberation/<id>/overrule`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { assertSanction, contentHash } from "../src/sanctions.mjs";
@@ -1752,12 +1752,12 @@ describe("owner gate", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: PASS for the first two assertions but the test documents current behaviour — run it to confirm the gate works standalone before wiring it.
 
-- [ ] **Step 3: Compute the hash server-side**
+- [x] **Step 3: Compute the hash server-side**
 
 In `src/api.mjs`, add `import { contentHash, assertSanction, markUsed } from "./sanctions.mjs";` and in the `POST /owner/sanction` handler at `:350`, replace the verbatim store of `body.content_hash`:
 
@@ -1769,7 +1769,7 @@ if (!hash) return sendJson(res, 400, { error: "content or content_hash required"
 
 and use `hash` in the INSERT in place of `body.content_hash`.
 
-- [ ] **Step 4: Add the deliberation routes**
+- [x] **Step 4: Add the deliberation routes**
 
 There is no param router — follow the prefix form already used at `api.mjs:391`. Add inside the owner-routes section:
 
@@ -1821,12 +1821,12 @@ if (path.startsWith("/owner/deliberation/")) {
 }
 ```
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `node --test`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/api.mjs test/deliberation.test.mjs
