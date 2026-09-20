@@ -1399,7 +1399,7 @@ git commit -m "dispatcher: scriptedReply test seam for verdict lines"
 
 ---
 
-## Task 11: The three dispatcher hooks
+## Task 11: The three dispatcher hooks — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Additions: `stall()` records `from_state`/`from_round` and only touches live rows; `advanceOnReply` resumes a stalled row in place when the packet it stalled on is retried successfully (the dispatcher retries expired leases on its own); the HALT sweep also abandons `stalled` rows. Task 14's `resumeState()` can read `stall_detail.from_state` directly instead of inferring from `answers`.
 
 `runOne` is fire-and-forget with no `.catch()` (`dispatcher.mjs:221`), so an unguarded throw in a hook becomes an unhandled rejection **and** leaves presence stuck at `"responding"`. Every hook is wrapped.
 
@@ -1410,7 +1410,7 @@ git commit -m "dispatcher: scriptedReply test seam for verdict lines"
 **Interfaces:**
 - Consumes: `advanceOnReply`, `abandon`, `findDeliberationFor` (Task 9)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { startDeliberation } from "../src/deliberation.mjs";
@@ -1475,12 +1475,12 @@ describe("dispatcher hooks", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — state stays `answer_1`
 
-- [ ] **Step 3: Hook the success path**
+- [x] **Step 3: Hook the success path**
 
 In `src/dispatcher.mjs`, immediately after the default-respond send (after `:519`, before the presence reset at `:522`):
 
@@ -1497,7 +1497,7 @@ try {
 }
 ```
 
-- [ ] **Step 4: Hook the failure path — stall, do not abandon**
+- [x] **Step 4: Hook the failure path — stall, do not abandon**
 
 A member can run out of provider usage **mid-deliberation**. Abandoning would throw
 away every run already spent — up to 6 real runs destroyed because the 7th hit a
@@ -1559,7 +1559,7 @@ it there rather than writing a fourth migration:
   stall_detail TEXT,
 ```
 
-- [ ] **Step 5: Hook the HALT sweep**
+- [x] **Step 5: Hook the HALT sweep**
 
 At `src/dispatcher.mjs:168-179`, inside the `if (isHalted())` branch, after the existing presence loop and before `return`:
 
@@ -1580,12 +1580,12 @@ Add the import at the top of `src/dispatcher.mjs`:
 import { advanceOnReply, abandon, findDeliberationFor } from "./deliberation.mjs";
 ```
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `node --test`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/dispatcher.mjs test/deliberation.test.mjs
