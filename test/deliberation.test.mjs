@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store.mjs";
-import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt, stall } from "../src/deliberation.mjs";
+import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt, stall, resumeStalled } from "../src/deliberation.mjs";
 import { createOutbox } from "../src/outbox.mjs";
 import { createDispatcher } from "../src/dispatcher.mjs";
 import http from "node:http";
@@ -1262,4 +1262,174 @@ describe("owner gate", () => {
     assert.equal(store.getEvents().filter((e) => e.kind === "deliberation_overruled").length, 2);
     assert.equal(store.verifyChain().ok, true);
   }));
+});
+
+describe("resume after a stall", () => {
+  const LIMITS = { daily_ceiling: { anthropic: 10, codex: 15 } };
+  const rowOf = (store, id) => store.prepare("SELECT * FROM deliberations WHERE id = ?").get(id);
+  const count = (store) => store.prepare("SELECT COUNT(*) AS c FROM messages").get().c;
+  const latestTo = (store, m) => store.prepare("SELECT * FROM messages WHERE recipients LIKE ? ORDER BY created DESC, rowid DESC").get(`%"${m}"%`);
+  const insertRuns = (store, member, n) => {
+    const now = new Date().toISOString();
+    for (let i = 0; i < n; i++) store.prepare(`INSERT INTO runs(id, member, chamber_id, message_id, argv, started) VALUES(?,?,?,?,?,?)`).run(`x-${member}-${i}`, member, "c1", null, "[]", now);
+  };
+  const withOutbox = (fn) => withStore((store) => {
+    const outbox = createOutbox(store);
+    try { return fn(store, outbox); } finally { try { outbox.close(); } catch { /* */ } }
+  });
+  const open = (store, outbox, q = "keep me") => startDeliberation(store, outbox, { chamber_id: "c1", question: q, deliberators: ["codex", "fable"], limits: LIMITS });
+
+  it("preserves the whole deliberation and re-sends the pending round", () => withOutbox((store, outbox) => {
+    const r = open(store, outbox);
+    const before = count(store);
+    stall(store, r.id, { member: "codex", reason: "exit_1", stderr: "usage limit reached" });
+    let row = rowOf(store, r.id);
+    assert.equal(row.state, "stalled");
+    assert.equal(row.question, "keep me", "the question survives");
+    assert.match(row.stall_detail, /usage limit reached/, "provider words are kept");
+
+    const out = resumeStalled(store, outbox, { limits: LIMITS });
+    assert.deepEqual(out, [{ id: r.id, resumed: "answer_1", round: 0, sent: 0 }]);
+    row = rowOf(store, r.id);
+    assert.equal(row.state, "answer_1", "returns to the state it stalled in");
+    assert.equal(row.flag, null);
+    assert.equal(row.stall_detail, null);
+    assert.equal(count(store), before, "the re-send is idempotent, not a duplicate");
+    const ev = store.getEvents().filter((e) => e.kind === "deliberation_resumed");
+    assert.equal(ev.length, 1);
+    assert.deepEqual(JSON.parse(ev[0].payload), { resumed: "answer_1", round: 0, from: "exit_1" });
+    assert.equal(store.verifyChain().ok, true);
+  }));
+
+  it("stays stalled while the budget is still short", () => withOutbox((store, outbox) => {
+    const r = open(store, outbox, "q");
+    stall(store, r.id, { member: "fable", reason: "exit_1" });
+    insertRuns(store, "fable", 8);
+    assert.equal(resumeStalled(store, outbox, { limits: LIMITS }).length, 0);
+    assert.equal(rowOf(store, r.id).state, "stalled");
+    assert.equal(rowOf(store, r.id).flag, "exit_1", "reason kept while waiting");
+    assert.equal(store.getEvents().filter((e) => e.kind === "deliberation_resumed").length, 0, "no event while nothing changes");
+  }));
+
+  it("a debate row resumes into the same round with its verdicts intact; packets already out are not re-sent", () => withOutbox((store, outbox) => {
+    const r = open(store, outbox, "q");
+    const first = store.prepare("SELECT * FROM messages").get();
+    advanceOnReply(store, outbox, { message: first, member: "codex", text: "A" });
+    advanceOnReply(store, outbox, { message: latestTo(store, "fable"), member: "fable", text: "B" });
+    advanceOnReply(store, outbox, { message: latestTo(store, "codex"), member: "codex", text: "DISAGREE: no" });
+    advanceOnReply(store, outbox, { message: latestTo(store, "fable"), member: "fable", text: "DISAGREE: no" });
+    // Round 2: codex has replied, fable's run then fails.
+    advanceOnReply(store, outbox, { message: latestTo(store, "codex"), member: "codex", text: "AGREE: fine" });
+    assert.equal(rowOf(store, r.id).round, 2);
+    const before = count(store);
+    stall(store, r.id, { member: "fable", reason: "timed_out" });
+    const out = resumeStalled(store, outbox, { limits: LIMITS });
+    assert.deepEqual(out, [{ id: r.id, resumed: "debate", round: 2, sent: 0 }]);
+    const row = rowOf(store, r.id);
+    assert.equal(row.state, "debate");
+    assert.equal(row.round, 2);
+    assert.deepEqual(JSON.parse(row.answers).__verdicts, { codex: "AGREE" }, "the half-round verdict survives the stall");
+    assert.equal(count(store), before, "both round-2 packets already exist");
+    // fable's retried packet now completes the round.
+    const done = advanceOnReply(store, outbox, { message: latestTo(store, "fable"), member: "fable", text: "AGREE: fine" });
+    assert.deepEqual(done, { state: "pending_owner", round: 2, flag: "agreed" });
+  }));
+
+  it("a packet that was never sent (crash between row and send) is created on resume, with the engine's sender rule", () => withOutbox((store, outbox) => {
+    const r = open(store, outbox, "q");
+    const first = store.prepare("SELECT * FROM messages").get();
+    advanceOnReply(store, outbox, { message: first, member: "codex", text: "A" });
+    // Simulate the lost send of fable's blind packet.
+    const key = deliberationKey(r.id, "answer_2", 0, "fable");
+    const lost = store.prepare("SELECT id FROM messages WHERE idempotency_key = ?").get(key);
+    store.prepare("DELETE FROM deliveries WHERE message_id = ?").run(lost.id);
+    store.prepare("DELETE FROM messages WHERE id = ?").run(lost.id);
+    stall(store, r.id, { member: "fable", reason: "exit_1" });
+    const out = resumeStalled(store, outbox, { limits: LIMITS });
+    assert.deepEqual(out, [{ id: r.id, resumed: "answer_2", round: 0, sent: 1 }]);
+    const packet = store.prepare("SELECT * FROM messages WHERE idempotency_key = ?").get(key);
+    assert.ok(packet, "the missing packet is re-created");
+    assert.deepEqual(JSON.parse(packet.recipients), ["fable"]);
+    assert.equal(packet.content, blindPrompt("q"), "round one stays blind on resume too");
+    assert.equal(packet.sender, "codex", "same sender rule as advanceOnReply: the member whose reply produced it, never owner");
+    assert.equal(packet.kind, "deliberate");
+  }));
+
+  it("legacy stall rows without from_state are inferred from round and answers (__-prefixed keys ignored)", () => withOutbox((store, outbox) => {
+    const a = open(store, outbox, "a");
+    const b = open(store, outbox, "b");
+    const c = open(store, outbox, "c");
+    // a: nothing answered -> answer_1
+    store.prepare("UPDATE deliberations SET state='stalled', flag='x', stall_detail='{}' WHERE id=?").run(a.id);
+    // b: one answer + bookkeeping keys -> answer_2
+    store.prepare("UPDATE deliberations SET state='stalled', flag='x', stall_detail=NULL, answers=? WHERE id=?")
+      .run(JSON.stringify({ codex: "A", __history: [{}], __verdicts: {} }), b.id);
+    // c: round 3 -> debate, round kept
+    store.prepare("UPDATE deliberations SET state='stalled', flag='x', stall_detail='not json', round=3, answers=? WHERE id=?")
+      .run(JSON.stringify({ codex: "A", fable: "B", __verdicts: {} }), c.id);
+    const out = resumeStalled(store, outbox, { limits: LIMITS });
+    const byId = Object.fromEntries(out.map((o) => [o.id, o]));
+    assert.equal(byId[a.id].resumed, "answer_1");
+    assert.equal(byId[b.id].resumed, "answer_2");
+    assert.equal(byId[c.id].resumed, "debate");
+    assert.equal(rowOf(store, c.id).round, 3);
+    assert.equal(byId[b.id].sent, 1, "fable's blind packet did not exist yet for b");
+    assert.equal(byId[c.id].sent, 2, "round-3 packets did not exist yet for c");
+    assert.match(store.prepare("SELECT content FROM messages WHERE idempotency_key = ?").get(deliberationKey(c.id, "debate", 3, "codex")).content, /round 3 of 3/);
+  }));
+
+  it("only stalled rows are touched; closed and live rows are ignored", () => withOutbox((store, outbox) => {
+    const live = open(store, outbox, "live");
+    const done = open(store, outbox, "done");
+    store.prepare("UPDATE deliberations SET state='abandoned', flag='halt' WHERE id=?").run(done.id);
+    const before = count(store);
+    assert.deepEqual(resumeStalled(store, outbox, { limits: LIMITS }), []);
+    assert.equal(rowOf(store, live.id).state, "answer_1");
+    assert.equal(rowOf(store, done.id).state, "abandoned");
+    assert.equal(count(store), before);
+  }));
+
+  it("the dispatcher tick resumes a stalled row and carries it to the owner; nothing resumes under HALT", async () => {
+    const DL = {
+      daily_ceiling: { codex: 100, fable: 100, anthropic: 100 },
+      timeout_ms: { codex: 3000, fable: 3000, fake: 3000 },
+      dispatcher: { tick_ms: 40, max_member_hops: 2, max_auto_replies_per_owner_turn: 4 },
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    async function waitFor(fn, { timeout = 8000, every = 40, label = "condition" } = {}) {
+      const deadline = Date.now() + timeout;
+      let last;
+      while (Date.now() < deadline) { last = fn(); if (last) return last; await sleep(every); }
+      throw new Error(`timeout waiting for ${label}; last=${JSON.stringify(last)}`);
+    }
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const d = createDispatcher({
+      home, useFake: true, members: ["codex", "fable"], tickMs: 40, timeoutMs: 3000, defaultRespond: true, limits: DL,
+      scriptedReply: (member, message) => (/debate round/i.test(String(message?.content || "")) ? "AGREE: yes" : `answer from ${member}`),
+    });
+    try {
+      const r = startDeliberation(d.store, d.outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: DL });
+      stall(d.store, r.id, { member: "codex", reason: "exit_1", stderr: "usage limit reached" });
+      // Under HALT the tick abandons rather than resumes; clear it first to prove resume needs a live council.
+      d.start();
+      const row = await waitFor(() => { const x = d.store.prepare("SELECT * FROM deliberations WHERE id = ?").get(r.id); return x.state === "pending_owner" ? x : null; }, { label: "resumed and settled" });
+      assert.equal(row.flag, "agreed");
+      const kinds = d.store.getEvents().map((e) => e.kind);
+      assert.ok(kinds.includes("deliberation_resumed"), "the tick resumed it");
+      assert.ok(kinds.indexOf("deliberation_resumed") < kinds.indexOf("deliberation_settled") || !kinds.includes("deliberation_settled"));
+      assert.equal(d.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 4);
+
+      // A second stalled row under HALT is abandoned, never resumed.
+      const r2 = startDeliberation(d.store, d.outbox, { chamber_id: "c2", question: "q2", deliberators: ["codex", "fable"], limits: DL });
+      stall(d.store, r2.id, { member: "codex", reason: "exit_1" });
+      writeFileSync(d.haltPath(), new Date().toISOString());
+      const row2 = await waitFor(() => { const x = d.store.prepare("SELECT * FROM deliberations WHERE id = ?").get(r2.id); return x.state !== "stalled" ? x : null; }, { label: "HALT sweep" });
+      assert.equal(row2.state, "abandoned");
+      assert.equal(d.store.getEvents().filter((e) => e.kind === "deliberation_resumed").length, 1, "no resume under HALT");
+    } finally {
+      try { await d.close(); } catch { /* */ }
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
 });

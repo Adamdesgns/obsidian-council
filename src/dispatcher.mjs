@@ -9,7 +9,7 @@ import { spawnMember, killTree as killTreeSync, adapterForSeat } from "./adapter
 import { buildPacket } from "./adapters/packet.mjs";
 import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/bridge-config.mjs";
 import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
-import { advanceOnReply, abandon, stall, findDeliberationFor } from "./deliberation.mjs";
+import { advanceOnReply, abandon, stall, resumeStalled, findDeliberationFor } from "./deliberation.mjs";
 
 export { parseAddressChain };
 import { fileURLToPath } from "node:url";
@@ -189,6 +189,12 @@ export function createDispatcher(opts = {}) {
       } catch { /* store may be closed */ }
       return;
     }
+
+    // Stalled deliberations go back on the floor once their members can run
+    // again. After the HALT check on purpose: a HALTed council resumes nothing.
+    try {
+      resumeStalled(store, outbox, { limits });
+    } catch { /* a failed resume must never stop the tick */ }
 
     for (const member of members) {
       // Find chambers with pending work and no active run

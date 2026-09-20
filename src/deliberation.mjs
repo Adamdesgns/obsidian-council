@@ -346,3 +346,86 @@ export function advanceOnReply(store, outbox, { message, member, text }) {
   }
   return { state: "debate", round: next, flag: null };
 }
+
+/**
+ * Where a stalled row goes back to. Prefer what stall() recorded; fall back to
+ * inference for rows stalled before from_state existed. `debate` keeps its round.
+ */
+function stateBeforeStall(row) {
+  let detail = null;
+  try { detail = JSON.parse(row.stall_detail || "null"); } catch { detail = null; }
+  if (detail && LIVE.includes(detail.from_state)) {
+    return { state: detail.from_state, round: Number.isInteger(detail.from_round) ? detail.from_round : row.round };
+  }
+  if (row.round > 0) return { state: "debate", round: row.round };
+  // answers holds whoever replied (bookkeeping keys are __-prefixed); one answer
+  // means answer_2 was pending.
+  let answers = {};
+  try { answers = JSON.parse(row.answers || "{}"); } catch { answers = {}; }
+  const answered = Object.keys(answers).filter((k) => !k.startsWith("__"));
+  return { state: answered.length >= 1 ? "answer_2" : "answer_1", round: 0 };
+}
+
+/** Same rule as advanceOnReply: the member whose reply produced the packet; owner only asked the question. */
+function senderFor(state, deliberators, answers) {
+  if (state === "answer_1") return "owner";
+  if (state === "answer_2") return deliberators[0];
+  const last = Array.isArray(answers.__history) ? answers.__history.at(-1) : null;
+  return last?.member || deliberators[1];
+}
+
+/**
+ * Put stalled deliberations back on the floor when their members can run again.
+ *
+ * Re-sending is safe because every engine send uses a deterministic idempotency
+ * key — an already-delivered round is a no-op, not a duplicate. That is the whole
+ * reason the keys are derived from (id, state, round, member) rather than a clock.
+ * The dispatcher calls this every tick after the HALT check, so a HALTed council
+ * never resumes anything.
+ *
+ * @returns {Array<{id: string, resumed: string, round: number, sent: number}>}
+ */
+export function resumeStalled(store, outbox, { limits } = {}) {
+  const rows = store.prepare("SELECT * FROM deliberations WHERE state = 'stalled'").all();
+  const resumed = [];
+
+  for (const row of rows) {
+    let deliberators;
+    try { deliberators = JSON.parse(row.deliberators); } catch { continue; }
+    const pre = preflight(store, { deliberators, limits });
+    if (!pre.ok) continue; // still short — leave it stalled, try again next tick
+
+    const { state, round } = stateBeforeStall(row);
+    let answers = {};
+    try { answers = JSON.parse(row.answers || "{}"); } catch { answers = {}; }
+
+    const changed = store.commit("deliberation_resumed", "dispatcher", (api) => {
+      const info = api.prepare(
+        "UPDATE deliberations SET state=?, round=?, flag=NULL, stall_detail=NULL, updated=? WHERE id=? AND state='stalled'"
+      ).run(state, round, api.nowIso(), row.id);
+      api.setRef("deliberations", row.id, { resumed: state, round, from: row.flag ?? null });
+      return info.changes > 0;
+    }).result;
+    if (!changed) continue;
+
+    const targets = state === "answer_1" ? [deliberators[0]]
+      : state === "answer_2" ? [deliberators[1]]
+        : deliberators;
+    const content = state === "debate" ? debatePrompt(row.question, answers, round) : blindPrompt(row.question);
+    const from = senderFor(state, deliberators, answers);
+    let sent = 0;
+    for (const m of targets) {
+      const r = outbox.send({
+        sender: from,
+        recipients: [m],
+        chamber_id: row.chamber_id,
+        kind: "deliberate",
+        content,
+        idempotency_key: deliberationKey(row.id, state, round, m),
+      });
+      if (!r.duplicate) sent++;
+    }
+    resumed.push({ id: row.id, resumed: state, round, sent });
+  }
+  return resumed;
+}
