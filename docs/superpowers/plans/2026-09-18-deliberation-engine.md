@@ -59,7 +59,7 @@ This plan covers the deliberation loop only. Two things from the spec are **deli
 
 ---
 
-## Task 1: Seat resolution
+## Task 1: Seat resolution — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`)
 
 A seat is an `(adapter, model, account)` triple. Today `fable` cannot spawn at all — `spawn.mjs:122` throws `unknown member adapter: fable`.
 
@@ -71,7 +71,7 @@ A seat is an `(adapter, model, account)` triple. Today `fable` cannot spawn at a
 **Interfaces:**
 - Produces: `seatOf(id) -> {id, adapter, model|null, account, role}`, `allSeats() -> Array<seat>`, `accountOf(id) -> string`, `seatIds() -> string[]`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 // test/seats.test.mjs
@@ -107,12 +107,12 @@ describe("seats", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/seats.test.mjs`
 Expected: FAIL — `Cannot find module '../src/seats.mjs'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```js
 // src/seats.mjs — what a member IS. Adapter, model, and which real account it spends.
@@ -160,12 +160,12 @@ export function accountOf(id) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/seats.test.mjs`
 Expected: PASS, 5 tests
 
-- [ ] **Step 5: Record the seats in config for visibility**
+- [x] **Step 5: Record the seats in config for visibility**
 
 Add to `config/council.json` (read by nothing yet — Task 3 wires it; this keeps the file honest):
 
@@ -183,7 +183,7 @@ Add to `config/council.json` (read by nothing yet — Task 3 wires it; this keep
 }
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/seats.mjs test/seats.test.mjs config/council.json
