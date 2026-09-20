@@ -5,15 +5,10 @@ import { openStore } from "./store.mjs";
 import { createOutbox } from "./outbox.mjs";
 import { councilHome, ensureHome } from "./home.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
-import { spawnMember, killTree as killTreeSync } from "./adapters/spawn.mjs";
+import { spawnMember, killTree as killTreeSync, adapterForSeat } from "./adapters/spawn.mjs";
 import { buildPacket } from "./adapters/packet.mjs";
 import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/bridge-config.mjs";
-import * as claudeAd from "./adapters/claude.mjs";
-import * as codexAd from "./adapters/codex.mjs";
-import * as grokAd from "./adapters/grok.mjs";
 import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
-
-const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
 
 export { parseAddressChain };
 import { fileURLToPath } from "node:url";
@@ -373,11 +368,11 @@ export function createDispatcher(opts = {}) {
     // P2-6e item 3: stamp bridge on every run of this spawn path (skip when mixed statuses already set).
     if (!mixedBridgeFallback) stampBridgeAll(bridgeStatus);
 
-    const ad = ADAPTERS[member];
     let text = "";
-    if (ad && ad.finalText) {
-      try { text = ad.finalText(result) || ""; } catch { text = ""; }
-    }
+    try {
+      // Seat -> adapter (fable -> claude). A non-seat member falls through to raw stdout.
+      text = adapterForSeat(member).finalText(result) || "";
+    } catch { text = ""; }
     if (!text) text = String(result && result.stdout || "").trim().slice(0, 4000);
     let outbound = [];
     try {

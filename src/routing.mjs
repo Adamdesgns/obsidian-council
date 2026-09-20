@@ -17,17 +17,37 @@
 //   - No chain + explicit recipients -> those recipients, verbatim.
 //   - No chain + no recipients -> DEFAULT_BROADCAST (codex+grok; claude's
 //     smaller daily ceiling is only spent when claude is addressed).
+//   - The routable set is the seat table (seats.mjs), so a new seat such as
+//     @fable is routable without touching this file.
+import { seatIds, allSeats } from "./seats.mjs";
+
 export const DEFAULT_BROADCAST = ["codex", "grok"];
 
-export const MEMBERS = ["codex", "grok", "claude"];
+/**
+ * Deliberation Engine Task 2 Step 5b: unaddressed owner messages belong to the
+ * deliberators, never the executors. NOT yet wired into routeOwnerSay: the
+ * dispatcher in council.mjs serves codex/grok/claude, so a fable delivery today
+ * would be a dead letter, and fable has no daily ceiling until Task 3 keys
+ * ceilings by account. Switch the consumer below when Task 3 lands.
+ */
+export function defaultBroadcast() {
+  return allSeats().filter((s) => s.role === "deliberator").map((s) => s.id);
+}
 
 export function parseAddressChain(text) {
   const found = [];
+  // "owner" is deliberately NOT routable. outbox.claim is recipient-scoped and
+  // the dispatcher only loops real members, so a delivery addressed to "owner"
+  // can never be claimed — it becomes a dead letter with no event recorded.
+  // The final reply already returns to the owner via the dispatcher's
+  // `["owner"]` fallback; the owner never needs to be a hop. seats.mjs has no
+  // owner entry, so the seat table is the whole routable set.
+  const known = new Set(seatIds());
   const re = /@([a-zA-Z][\w-]*)/g;
   let m;
   while ((m = re.exec(String(text || "")))) {
     const id = m[1].toLowerCase();
-    if (MEMBERS.includes(id)) found.push(id);
+    if (known.has(id)) found.push(id);
   }
   return found;
 }

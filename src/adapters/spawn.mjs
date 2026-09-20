@@ -7,9 +7,33 @@ import { randomUUID } from "node:crypto";
 import * as claude from "./claude.mjs";
 import * as codex from "./codex.mjs";
 import * as grok from "./grok.mjs";
+import { seatOf } from "../seats.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+// Keyed by ADAPTER id. Member ids go through seatOf() first: fable -> claude.
 const ADAPTERS = { claude, codex, grok };
+
+/** Resolve the adapter module for a SEAT id (not an adapter id). */
+export function adapterForSeat(id) {
+  const seat = seatOf(id);
+  const adapter = ADAPTERS[seat.adapter];
+  if (!adapter) throw new Error("unknown member adapter: " + seat.adapter);
+  return adapter;
+}
+
+/** Build argv for a seat, threading its model when it has one. */
+export function argsForSeat(id, packet, opts = {}) {
+  const seat = seatOf(id);
+  const adapter = adapterForSeat(id);
+  const args = adapter.argsFor(packet, opts);
+  if (!seat.model) return args;
+  return ["--model", seat.model, ...args];
+}
+
+/** Adapter id for a seat, or null when the id is not a seat at all. */
+function adapterIdOf(member) {
+  try { return seatOf(member).adapter; } catch { return null; }
+}
 
 const KEEP = [
   "PATH", "Path", "SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP",
@@ -68,14 +92,15 @@ function resolveCli(member, opts = {}) {
   const HOME = process.env.USERPROFILE || process.env.HOME || "";
   const APPDATA = process.env.APPDATA || join(HOME, "AppData", "Roaming");
   const LOCALAPPDATA = process.env.LOCALAPPDATA || join(HOME, "AppData", "Local");
-  if (member === "claude") {
+  const adapter = adapterIdOf(member);
+  if (adapter === "claude") {
     const exe = join(APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
     const cli = join(APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
     if (existsSync(exe)) return { exe, prefix: [], found: true };
     if (existsSync(cli)) return { exe: process.execPath, prefix: [cli], found: true };
     return { found: false };
   }
-  if (member === "codex") {
+  if (adapter === "codex") {
     const bin = join(LOCALAPPDATA, "OpenAI", "Codex", "bin");
     if (existsSync(bin)) {
       const cands = readdirSync(bin)
@@ -87,7 +112,7 @@ function resolveCli(member, opts = {}) {
     }
     return { found: false };
   }
-  if (member === "grok") {
+  if (adapter === "grok") {
     const exe = join(HOME, ".grok", "bin", "grok.exe");
     return existsSync(exe) ? { exe, prefix: [], found: true } : { found: false };
   }
@@ -115,12 +140,11 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
     ?? 240_000;
   const role = opts.role || "review";
   const cwd = opts.cwd || process.cwd();
-  const adapter = ADAPTERS[member];
+  const adapterId = adapterIdOf(member);
 
   let argv = argvOrPacket;
   if (argvOrPacket && !Array.isArray(argvOrPacket)) {
-    if (!adapter) throw new Error("unknown member adapter: " + member);
-    argv = adapter.argsFor(argvOrPacket, {
+    argv = argsForSeat(member, argvOrPacket, {
       resume: opts.resume,
       persist: opts.persist,
       newId: opts.newId,
@@ -171,7 +195,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   });
 
   let envExtra = {};
-  if (member === "codex" && role === "build" && typeof codex.envFor === "function") {
+  if (adapterId === "codex" && role === "build" && typeof codex.envFor === "function") {
     envExtra = codex.envFor("build", cwd);
   }
   if (opts.memberToken) {
@@ -223,7 +247,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
 
   // Codex Build: verify effective sandbox_policy from rollout
   let buildCheck = null;
-  if (member === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
+  if (adapterId === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
     buildCheck = codex.verifyBuildResult(result);
     if (!buildCheck.ok) {
       result.refused = buildCheck.refused;
