@@ -763,7 +763,7 @@ git commit -m "schema: deliberations table"
 
 ---
 
-## Task 7: Preflight budget check
+## Task 7: Preflight budget check — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Additions: ceilings via `ceilingFor` (same rule as `spawnMember`), budget grouped per account (two deliberators on one account need 8), unknown seat / empty list refused not thrown, `needed` returned alongside `remaining`.
 
 **Files:**
 - Create: `src/deliberation.mjs`
@@ -773,7 +773,7 @@ git commit -m "schema: deliberations table"
 - Consumes: `runsTodayForAccount` (Task 3), `accountOf` (Task 1)
 - Produces: `preflight(store, {deliberators, limits}) -> {ok: true} | {ok: false, reason, member, remaining}`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { preflight } from "../src/deliberation.mjs";
@@ -819,12 +819,12 @@ describe("preflight", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — `Cannot find module '../src/deliberation.mjs'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```js
 // src/deliberation.mjs — one question in, one agreed answer out.
@@ -854,12 +854,12 @@ export function preflight(store, { deliberators, limits }) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/deliberation.mjs test/deliberation.test.mjs
