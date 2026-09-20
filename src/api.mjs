@@ -411,6 +411,17 @@ export function createApi(opts = {}) {
       return sendJson(res, r.reason === "insufficient_budget" ? 409 : 400, r);
     }
 
+    // Floor list view: summary columns only. `answers` can hold every reply of a
+    // three-round debate, so it stays on the per-row GET.
+    if (req.method === "GET" && path === "/owner/deliberations") {
+      const chamberId = url.searchParams.get("chamber_id");
+      const cols = "id, chamber_id, question, category, state, round, flag, final_answer, created, updated";
+      const rows = chamberId
+        ? store.prepare(`SELECT ${cols} FROM deliberations WHERE chamber_id = ? ORDER BY created DESC LIMIT 50`).all(chamberId)
+        : store.prepare(`SELECT ${cols} FROM deliberations ORDER BY created DESC LIMIT 50`).all();
+      return sendJson(res, 200, { deliberations: rows });
+    }
+
     if (path.startsWith("/owner/deliberation/")) {
       const [id, action, ...more] = path.slice("/owner/deliberation/".length).split("/");
       if (!id || more.length) return sendJson(res, 404, { error: "not_found" });
