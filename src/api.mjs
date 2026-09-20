@@ -13,6 +13,7 @@ import { seatIds } from "./seats.mjs";
 import { contentHash } from "./sanctions.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
 import { startDeliberation, readDeliberation, resumeStalled, decide, abandon, haltDeliberations, taskFor } from "./deliberation.mjs";
+import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders} from "./work-orders.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
 
@@ -114,8 +115,10 @@ export function createApi(opts = {}) {
   }
 
   function assertOrdinaryChamber(id) {
-    if (id && (String(id).startsWith("deliberation-") || store.prepare("SELECT 1 FROM deliberations WHERE chamber_id=?").get(String(id))))
-      throw Object.assign(new Error("deliberation_chamber_reserved"), {statusCode:409});
+    if (id && (String(id).startsWith("deliberation-") || String(id).startsWith("work-") ||
+      store.prepare("SELECT 1 FROM deliberations WHERE chamber_id=?").get(String(id)) ||
+      store.prepare("SELECT 1 FROM work_orders WHERE chamber_id=?").get(String(id))))
+      throw Object.assign(new Error("engine_chamber_reserved"), {statusCode:409});
   }
 
   function stampSender(identity, body) {
@@ -321,6 +324,31 @@ export function createApi(opts = {}) {
   }
 
   async function ownerRoutes(req, res, path, identity, url) {
+    if(req.method==="GET"&&path==="/owner/work-orders"){
+      const rows=store.prepare("SELECT id FROM work_orders ORDER BY created DESC LIMIT 100").all();
+      return sendJson(res,200,{work_orders:rows.map(r=>readWorkOrder(store,r.id))});
+    }
+    if(req.method==="POST"&&path==="/owner/delegate"){
+      if(existsSync(join(home,"HALT")))return sendJson(res,409,{error:"halted"});
+      const body=await readBody(req);
+      const r=startWorkOrder(store,{objective:body.objective||body.content,workspace:body.workspace,worker:body.worker,
+        source_chamber_id:body.chamber_id||null,idempotency_key:body.idempotency_key});
+      return sendJson(res,r.ok?200:409,{...r,error:r.ok?undefined:r.reason});
+    }
+    const workMatch=/^\/owner\/work-order\/([^/]+)(?:\/(approve|resume|cancel))?$/.exec(path);
+    if(workMatch){
+      const [,id,action]=workMatch,row=readWorkOrder(store,id);
+      if(!row)return sendJson(res,404,{error:"not_found"});
+      if(req.method==="GET"&&!action)return sendJson(res,200,row);
+      if(req.method==="POST"&&action){
+        if(action!=="cancel"&&existsSync(join(home,"HALT")))return sendJson(res,409,{error:"halted"});
+        const body=await readBody(req);
+        const r=action==="approve"?approveWorkPlan(store,id,{plan_hash:body.plan_hash})
+          :action==="resume"?resumeWork(store,id):cancelWork(store,id);
+        return sendJson(res,r.ok?200:409,{...r,error:r.ok?undefined:r.reason});
+      }
+      return sendJson(res,405,{error:"method_not_allowed"});
+    }
     if (req.method === "GET" && path === "/owner/deliberations") {
       const rows=store.prepare("SELECT id FROM deliberations ORDER BY created DESC LIMIT 100").all();
       return sendJson(res,200,{deliberations:rows.map(r=>readDeliberation(store,r.id))});
@@ -423,6 +451,7 @@ export function createApi(opts = {}) {
       writeFileSync(join(home, "HALT"), new Date().toISOString(), "utf8");
       halt = true;
       haltDeliberations(store);
+      haltWorkOrders(store);
       store.commit("halt_set", "owner", (api) => api.setRef(null, null, { halt: true }));
       return sendJson(res, 200, { halt: true });
     }

@@ -13,6 +13,9 @@
   main { display:grid; grid-template-columns:220px 1fr 280px; min-height:calc(100vh - 52px); }
   aside, section { padding:12px; border-right:1px solid var(--line); background:var(--panel); }
   #floor { display:flex; flex-direction:column; background:var(--bg); }
+  #delegatePanel { border:1px solid #3b4f7a; border-radius:8px; padding:12px; margin-bottom:12px; background:#111722; }
+  #delegatePanel input, #delegatePanel select { min-width:0; }
+  #workText { white-space:pre-wrap; overflow-wrap:anywhere; max-height:34vh; overflow:auto; background:#0a0b0e; padding:8px; border-radius:6px; }
   #log { flex:1; max-height:65vh; min-height:240px; overflow-wrap:anywhere; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace; font-size:12px; padding:8px; background:#0a0b0e; border:1px solid var(--line); border-radius:8px; }
   #composer { display:flex; gap:8px; padding-top:8px; }
   input, button, select { background:#1a1b21; color:var(--text); border:1px solid #333; padding:8px; border-radius:6px; }
@@ -54,7 +57,27 @@
     <ul id="chamberList"></ul>
   </aside>
   <section id="floor">
-    <h2>Floor</h2>
+    <div id="delegatePanel">
+      <h2>Delegate work</h2>
+      <p>Codex plans first. After you approve the exact plan, the selected specialist receives it and the sandboxed Codex build lane applies the work.</p>
+      <textarea id="workObjective" placeholder="What should be built?"></textarea>
+      <div class="row">
+        <input id="workWorkspace" placeholder="Absolute project or isolated worktree path" style="flex:1"/>
+        <select id="workWorker">
+          <option value="codex">Codex builds</option>
+          <option value="claude">Claude handoff → Codex builds</option>
+          <option value="grok">Grok handoff → Codex builds</option>
+          <option value="cursor">Cursor handoff packet</option>
+        </select>
+        <button id="startWork">Create implementation plan</button>
+      </div>
+      <select id="workSelect" style="width:100%"><option value="">No work orders yet</option></select>
+      <p id="workStatus" role="status">No work order selected.</p>
+      <pre id="workText"></pre>
+      <div class="row"><button id="approveWork" disabled>Approve plan and hand off</button><button id="resumeWork" disabled>Resume</button><button id="cancelWork" disabled>Cancel</button></div>
+      <p id="workError" role="alert"></p>
+    </div>
+    <h2>Conversation</h2>
     <div id="log"></div>
     <div id="composer">
       <input id="say" placeholder="@codex @grok plan…" style="flex:1"/>
@@ -94,6 +117,8 @@ document.getElementById("ownerToken").addEventListener("change", saveToken);
 // First run: `npm start` prints one link like http://127.0.0.1:4777/#owner=<token>.
 // Take the token out of the URL, remember it in this browser only, then scrub the address bar.
 (function adoptLinkToken() {
+  const linkedWorkspace = typeof URLSearchParams === "function" ? new URLSearchParams(location.search).get("workspace") : "";
+  if (linkedWorkspace) document.getElementById("workWorkspace").value = linkedWorkspace;
   const m = location.hash.match(/#owner=([0-9a-f]{64})/);
   if (!m) return;
   localStorage.setItem("council.ownerToken", m[1]);
@@ -195,7 +220,7 @@ document.getElementById("haltToggle").onclick = async () => {
   else await api("/owner/halt", { method: "POST", body: {} });
   refresh();
 };
-document.getElementById("refresh").onclick = async()=>{await refresh();await refreshDecisions();};
+document.getElementById("refresh").onclick = async()=>{await refresh();await refreshWork();await refreshDecisions();};
 
 function connectFloor() {
   if (es) try { es.close(); } catch {}
@@ -230,9 +255,48 @@ setInterval(async () => {
     document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
   } catch {}
   await pollMessages();
+  await refreshWork();
   await refreshDecisions();
 }, 3000);
 document.getElementById("chamberSelect").addEventListener("change", pollMessages);
+
+let workRows=[],selectedWork=localStorage.getItem("council.workOrder")||"",workBusy=false;
+function renderWork(){
+  const row=workRows.find(r=>r.id===selectedWork);
+  const labels={planning:"Codex is building the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Sandboxed Codex build is running",completed:"Work completed",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Cursor handoff packet ready"};
+  document.getElementById("workStatus").textContent=row?(labels[row.state]||row.state)+(row.state==="specialist"?row.worker:""):"No work order selected.";
+  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE","Codex plan → "+row.worker+(row.worker!=="codex"&&row.worker!=="cursor"?" specialist → Codex build":""),
+    ...(row.plan?["IMPLEMENTATION PLAN",row.plan]:[]),...(row.specialist_output?["SPECIALIST HANDOFF",row.specialist_output]:[]),
+    ...(row.result?["BUILD REPORT",row.result]:[]),...(row.handoff?["CURSOR PACKET",row.handoff]:[]),...(row.stall_detail?["PAUSED",row.stall_detail]:[])]:[];
+  document.getElementById("workText").textContent=parts.join("\n\n");
+  document.getElementById("approveWork").disabled=workBusy||row?.state!=="awaiting_approval";
+  document.getElementById("resumeWork").disabled=workBusy||row?.state!=="stalled";
+  document.getElementById("cancelWork").disabled=workBusy||!row||["completed","cancelled"].includes(row.state);
+}
+async function refreshWork(){
+  if(!token())return;
+  try{
+    const r=await api("/owner/work-orders");workRows=r.work_orders||[];
+    if(!workRows.some(r=>r.id===selectedWork))selectedWork=workRows[0]?.id||"";
+    const sel=document.getElementById("workSelect");sel.innerHTML="";
+    for(const row of workRows){const o=document.createElement("option");o.value=row.id;o.textContent=row.objective.slice(0,80);o.selected=row.id===selectedWork;sel.appendChild(o);}
+    renderWork();
+  }catch(e){document.getElementById("workError").textContent=e.message;}
+}
+document.getElementById("workSelect").addEventListener("change",()=>{selectedWork=document.getElementById("workSelect").value;localStorage.setItem("council.workOrder",selectedWork);renderWork();});
+let workSubmission=null;
+document.getElementById("startWork").onclick=async()=>{
+  if(workBusy)return;const objective=document.getElementById("workObjective").value.trim(),workspace=document.getElementById("workWorkspace").value.trim(),worker=document.getElementById("workWorker").value;
+  if(!objective||!workspace){document.getElementById("workError").textContent="Enter the objective and absolute workspace path.";return;}
+  if(!workSubmission||workSubmission.objective!==objective||workSubmission.workspace!==workspace||workSubmission.worker!==worker)workSubmission={objective,workspace,worker,key:"work:"+crypto.randomUUID()};
+  workBusy=true;renderWork();
+  try{const r=await api("/owner/delegate",{method:"POST",body:{objective,workspace,worker,idempotency_key:workSubmission.key,chamber_id:document.getElementById("chamberSelect").value||null}});selectedWork=r.id;localStorage.setItem("council.workOrder",r.id);workSubmission=null;document.getElementById("workError").textContent="";await refreshWork();}
+  catch(e){document.getElementById("workError").textContent=e.message;}finally{workBusy=false;renderWork();}
+};
+async function workAction(action){const row=workRows.find(r=>r.id===selectedWork);if(!row||workBusy)return;workBusy=true;renderWork();try{await api("/owner/work-order/"+encodeURIComponent(row.id)+"/"+action,{method:"POST",body:action==="approve"?{plan_hash:row.plan_hash}:{}});document.getElementById("workError").textContent="";await refreshWork();}catch(e){document.getElementById("workError").textContent=e.message;}finally{workBusy=false;renderWork();}}
+document.getElementById("approveWork").onclick=()=>workAction("approve");
+document.getElementById("resumeWork").onclick=()=>workAction("resume");
+document.getElementById("cancelWork").onclick=()=>workAction("cancel");
 
 
 let decisionRows = [], selectedDecision = localStorage.getItem("council.decision") || "", decisionBusy = false;
@@ -300,8 +364,9 @@ document.getElementById("resumeDecision").onclick=()=>decideAction("resume");
 document.getElementById("cancelDecision").onclick=()=>decideAction("cancel");
 
 refreshDecisions();
+refreshWork();
 refresh();
-line("Floor ready. Type a question, then choose Say or Deliberate.");
+line("Council ready. Delegate work above, or use Say / Deliberate for conversation and decisions.");
 </script>
 </body>
 </html>

@@ -8,6 +8,9 @@ const failed=new Set();
 const c=await startCouncil({home,port:0,useFake:true,tickMs:100,disableBridge:true,
   limits:{daily_ceiling:{codex:1000,claude:1000,grok:1000},timeout_ms:{fake:5000}},
   scriptedReply:(member,msg)=>{
+    if(msg.content.includes("planning stage of a Council work order")) return "1. Inspect the requested feature and current tests.\n2. Update the named implementation modules.\n3. Add focused regression coverage.\n4. Run the local test suite and report changed files, results, and remaining gates.";
+    if(msg.content.includes("selected specialist")) return `${member} reviewed the approved plan: preserve existing behavior, add failure-path coverage, and keep push/deploy outside this work order.`;
+    if(msg.content.includes("Execute this approved Council work order")) return "SIMULATED BUILD COMPLETE\nFiles: example implementation + focused tests\nValidation: simulated local suite passed\nNo push, merge, deploy, spend, or external action performed.";
     if(msg.content.includes("[fail]") && member==="codex" && !failed.has(msg.chamber_id)){
       failed.add(msg.chamber_id);return {exit:1,stderr:"Simulated allowance exhausted; Resume retries this step."};
     }

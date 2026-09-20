@@ -12,7 +12,7 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
     if (!envelope || typeof envelope !== "object") throw new Error("envelope required");
     const key = envelope.idempotency_key;
     if (!key) throw new Error("idempotency_key required");
-    if (envelope.sender === "engine" || /^delib(?:eration)?[:\-]/.test(String(key))) {
+    if (envelope.sender === "engine" || /^(?:delib(?:eration)?|work)[:\-]/.test(String(key))) {
       throw Object.assign(new Error("engine_envelope_reserved"), { statusCode: 400 });
     }
 
@@ -135,7 +135,10 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
       const row = api.prepare(
         `SELECT * FROM deliveries
          WHERE recipient = ? AND (? IS NULL OR id = ?)
-           AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM deliberation_messages dm WHERE dm.message_id=deliveries.message_id))
+           AND (? IS NOT NULL OR (
+             NOT EXISTS (SELECT 1 FROM deliberation_messages dm WHERE dm.message_id=deliveries.message_id)
+             AND NOT EXISTS (SELECT 1 FROM work_order_messages wm WHERE wm.message_id=deliveries.message_id)
+           ))
            AND (
              status = 'pending'
              OR (status = 'leased' AND lease_until IS NOT NULL AND lease_until < ?)

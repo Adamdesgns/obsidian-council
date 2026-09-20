@@ -15,6 +15,7 @@ import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
 
 import { seatOf } from "./seats.mjs";
 import { taskFor, canDispatch, completeReply, stall, haltDeliberations } from "./deliberation.mjs";
+import { workTaskFor, canDispatchWork, completeWorkReply, stallWork, haltWorkOrders } from "./work-orders.mjs";
 
 const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
 
@@ -163,6 +164,7 @@ export function createDispatcher(opts = {}) {
     if (stopped) return;
     if (isHalted()) {
       haltDeliberations(store);
+      haltWorkOrders(store);
       // Cancel active fakes if possible
       for (const [k, meta] of active) {
         if (meta.child) {
@@ -190,7 +192,10 @@ export function createDispatcher(opts = {}) {
 
       for (const row of pending) {
         const engineTask = taskFor(store, row.message_id);
+        const workTask = workTaskFor(store, row.message_id);
         if (engineTask && !canDispatch(store, row.message_id, member)) continue;
+        if (workTask && !canDispatchWork(store, row.message_id, member)) continue;
+        const managedTask = engineTask || workTask;
         if (row.status === "waiting") continue; // waiting for peer answer
         const chamber = row.chamber_id || "_";
         const key = activeKey(member, chamber);
@@ -201,17 +206,17 @@ export function createDispatcher(opts = {}) {
         // to the owner), so a chain with exactly maxHops member hops completes.
         // Initiating hops beyond the cap is blocked at send time in runOne.
         const hops = hopCount.get(chamber) || 0;
-        if (!engineTask && hops > maxHops && row.sender !== "owner") {
+        if (!managedTask && hops > maxHops && row.sender !== "owner") {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "hop_cap", chamber });
           });
           continue;
         }
         const autos = autoReplies.get(chamber) || 0;
-        if (!engineTask && row.sender === "owner") {
+        if (!managedTask && row.sender === "owner") {
           autoReplies.set(chamber, 0);
           hopCount.set(chamber, 0);
-        } else if (!engineTask && autos >= maxAuto) {
+        } else if (!managedTask && autos >= maxAuto) {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "auto_reply_cap", chamber });
           });
@@ -239,6 +244,8 @@ export function createDispatcher(opts = {}) {
     const { delivery, message, gen } = claimed;
     chamber = message.chamber_id || "_";
     const engineTask = taskFor(store, message.id);
+    const workTask = workTaskFor(store, message.id);
+    const managedTask = engineTask || workTask;
     const adapterId = seatOf(member)?.adapter;
 
     // P2-6e: summons never spend model runs — presence invited only.
@@ -254,7 +261,7 @@ export function createDispatcher(opts = {}) {
     let session = store.prepare(
       "SELECT * FROM sessions WHERE member = ? AND chamber_id = ?"
     ).get(member, chamber === "_" ? "" : chamber);
-    let resume = engineTask ? null : session?.provider_session_id || null;
+    let resume = managedTask ? null : session?.provider_session_id || null;
     let resumeFailed = false;
 
     const msgPayload = {
@@ -264,16 +271,16 @@ export function createDispatcher(opts = {}) {
       content: message.content,
     };
     // P2-6d/e: Codex + Grok plain-text / bridge=none (bridge cert is Phase 3).
-    const plainText = !!engineTask || adapterId === "codex" || adapterId === "grok" || !!opts.disableBridge;
+    const plainText = !!managedTask || adapterId === "codex" || adapterId === "grok" || !!opts.disableBridge;
     let packet = buildPacket({ member, chamber, message: msgPayload, plainText });
 
-    const cwd = join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
+    const cwd = workTask?.workspace || join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
     mkdirSync(cwd, { recursive: true });
     let bridge = prepareBridge(adapterId, {
       cwd,
       token: tokens[member],
       apiBase,
-      disabled: !!engineTask || !!opts.disableBridge || adapterId === "codex" || adapterId === "grok",
+      disabled: !!managedTask || !!opts.disableBridge || adapterId === "codex" || adapterId === "grok",
     });
     const spawnOpts = {
       chamber_id: chamber === "_" ? null : chamber,
@@ -281,12 +288,12 @@ export function createDispatcher(opts = {}) {
       resume,
       persist: !engineTask && !resume,
       newId: member === "grok" && !resume ? crypto.randomUUID() : null,
-      role: "review",
-      memberToken: engineTask ? null : tokens[member],
+      role: workTask?.phase === "implementing" ? "build" : "review",
+      memberToken: managedTask ? null : tokens[member],
       cwd,
       timeoutMs: opts.timeoutMs,
       limits: opts.limits || limits,
-      skipBuildVerify: true,
+      skipBuildVerify: !!opts.useFake || workTask?.phase !== "implementing",
       onSpawn: (child) => { meta.child = child; },
       env: { ...(opts.env || {}), ...(bridge.env || {}) },
       extraArgs: bridge.extraArgs || [],
@@ -411,6 +418,7 @@ export function createDispatcher(opts = {}) {
       stampBridgeAll(bridgeStatus, { fail: failReason });
       try {
         if (engineTask) stall(store, {message, delivery, gen, member, reason: failReason, result});
+        else if (workTask) stallWork(store, {message, delivery, gen, member, reason: failReason, result});
         else expireDeliveryLease(delivery.id, failReason, member);
       } catch { /* store may be closed after hardStop */ }
       try {
@@ -423,6 +431,12 @@ export function createDispatcher(opts = {}) {
     if (engineTask) {
       if (isHalted()) haltDeliberations(store);
       completeReply(store, {message, delivery, gen, member, text});
+      setPresence(member, "idle");
+      return;
+    }
+    if (workTask) {
+      if (isHalted()) haltWorkOrders(store);
+      else completeWorkReply(store, {message, delivery, gen, member, text});
       setPresence(member, "idle");
       return;
     }

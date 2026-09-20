@@ -233,7 +233,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   // Codex Build: verify effective sandbox_policy from rollout
   let buildCheck = null;
   if (member === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
-    buildCheck = codex.verifyBuildResult(result);
+    buildCheck = codex.verifyBuildResult(result, {home: envExtra.USERPROFILE || envExtra.HOME});
     if (!buildCheck.ok) {
       result.refused = buildCheck.refused;
       result.buildPolicy = buildCheck.policy;

@@ -1,6 +1,16 @@
 # The Obsidian Council
 
-A local room where your AI coding CLIs talk to each other, and you hold the Black Seat.
+A local delegation desk where your AI coding CLIs pass real work to each other, and you hold the Black Seat.
+
+## Local Work Orders (not released)
+
+The primary local workflow is **Delegate work**: give the Council an objective, an absolute project or isolated-worktree path, and a specialist. Codex inspects that workspace read-only and produces an implementation plan. You approve the exact plan, then the Council passes it to the selected lane and returns the result to the same screen.
+
+- **Codex:** the approved plan goes directly to the certified workspace-write Codex build lane.
+- **Claude or Grok:** the selected model inspects the project read-only and produces implementation guidance; the sandboxed Codex lane applies that handoff and runs local validation.
+- **Cursor:** the Council produces one complete Cursor handoff packet. Cursor has no callable agent CLI on this PC, so this lane is visibly `handoff_ready` rather than pretending that Cursor started.
+
+Work orders survive restarts, reject duplicate submissions, pause on provider failure, resume only unfinished work, and stop under HALT. They never push, merge, deploy, spend, use credentials or contact anyone. Those remain separate owner-authorized actions.
 
 You type one line on the Floor: `@codex write the plan. @grok tear it apart. @codex revise it.`
 Codex writes, Grok critiques, Codex revises, and every message, delivery and model run lands in one
@@ -10,7 +20,7 @@ the calls each CLI already makes to its own provider.
 
 Zero npm dependencies. Plain Node. One process. MIT.
 
-## Local Deliberation Engine (not released)
+## Optional Deliberation Engine (not released)
 
 The local build adds **Deliberate**: two members answer independently, compare answers for up to three rounds, then bring an exact candidate answer to the Black Seat. Approve it, replace it, or cancel. Failed runs pause; Resume retries only unfinished work. No Jev account or key is needed. Approval records a decision; it does not execute it.
 
@@ -46,8 +56,8 @@ See [local acceptance evidence](docs/evidence/deliberation-local-2026-09-19.md) 
 - The MCP bridge (members calling the Council's tools directly from inside a run) is built and
   tested, but Codex refuses it under `approval_policy=never`, and Grok exits on a project MCP
   config. Members reply by plain text instead, which is what the live proof used.
-- No approved build/test/review loop in a sandbox yet. That is v0.2 (Codex's certified
-  workspace-write sandbox is already proven in `docs/evidence/phase1-acceptance.md`).
+- Claude and Grok remain read-only on Windows; only Codex has the certified workspace-write sandbox.
+- Cursor can receive a complete handoff packet, but automated Cursor execution is unavailable until a supported agent CLI or bridge exists.
 - No phone, no remote access, no auth beyond the loopback bearer tokens. Do not expose the port.
 - Windows only for now. The spawn code uses `taskkill` and Windows paths.
 
