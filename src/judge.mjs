@@ -128,6 +128,7 @@ export function createJudge(opts = {}) {
   const jev = opts.jev || null;                  // { evaluate({model, state, questions}) }
   const model = opts.model || "jev-1.13.0";      // pin: thresholds are tuned per version
   const escalateBelow = opts.escalateBelow ?? 0.5;
+  const maxJevCalls = opts.maxJevCalls ?? Infinity; // typed spend cap for this judge's lifetime
   const cfg = opts.screen || {};
   const stats = { total: 0, local: 0, jev: 0, escalated: 0, byRule: Object.create(null) };
 
@@ -173,23 +174,62 @@ export function createJudge(opts = {}) {
       });
     }
 
+    if (stats.jev >= maxJevCalls) {
+      return note({
+        decision: "UNCLEAR",
+        confidence: 0,
+        via: "local",
+        rule: "jev_budget",
+        needsJev: true,
+        escalate: true,
+        member,
+        messageId,
+        evidence: { ratio: overlapRatio(received, reply), max_jev_calls: maxJevCalls },
+      });
+    }
+
     const state = { material: String(received), reply: String(reply) };
     const questions = buildQuestions();
-    const res = await jev.evaluate({ model, state, questions });
+    let res;
+    try {
+      res = await jev.evaluate({ model, state, questions });
+    } catch (e) {
+      // A failing client must never take the dispatcher down or pass as a verdict.
+      return note({
+        decision: "UNCLEAR",
+        confidence: 0,
+        via: "jev",
+        rule: "typed_error",
+        model,
+        member,
+        messageId,
+        escalate: true,
+        evidence: { error: String(e && e.message || e), state, questions },
+      });
+    }
 
     const choice = res?.responsive || {};
-    const decision = VERDICTS.includes(choice.choice) ? choice.choice : "UNCLEAR";
-    const confidence = Number(choice.confidence ?? 0);
+    const rawConfidence = choice.confidence;
+    const wellFormed =
+      VERDICTS.includes(choice.choice)
+      && typeof rawConfidence === "number"
+      && Number.isFinite(rawConfidence)
+      && rawConfidence >= 0
+      && rawConfidence <= 1;
+    // Off-schema choice or a confidence that is not a number in [0, 1]: a NaN
+    // would compare false against escalateBelow and sail through un-escalated.
+    const decision = wellFormed ? choice.choice : "UNCLEAR";
+    const confidence = wellFormed ? rawConfidence : 0;
 
     return note({
       decision,
       confidence,
       via: "jev",
-      rule: "typed",
+      rule: wellFormed ? "typed" : "typed_invalid",
       model: res?.model || model,
       member,
       messageId,
-      escalate: confidence < escalateBelow,
+      escalate: !wellFormed || confidence < escalateBelow,
       // No chain of thought exists, so persist the inputs and the raw numbers instead.
       evidence: {
         probabilities: choice.probabilities ?? null,

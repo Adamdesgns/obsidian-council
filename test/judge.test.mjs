@@ -97,6 +97,53 @@ test("the model returns only listed options", async () => {
   assert.ok(VERDICTS.includes(v.decision), "an off-schema answer must not leak through");
 });
 
+test("a client that throws never takes the judge down: UNCLEAR, escalated, recorded", async () => {
+  const fake = { calls: [], async evaluate() { throw new Error("socket hang up"); } };
+  const j = createJudge({ jev: fake });
+  const v = await j.judge({ received: PLAN, reply: "Sure. Looks fine to me overall." });
+  assert.equal(v.decision, "UNCLEAR");
+  assert.equal(v.via, "jev");
+  assert.equal(v.rule, "typed_error");
+  assert.equal(v.escalate, true);
+  assert.match(v.evidence.error, /socket hang up/);
+  assert.equal(j.stats().byRule.typed_error, 1);
+});
+
+test("a malformed confidence cannot slip a verdict past the escalation gate", async () => {
+  for (const confidence of ["high", NaN, -0.2, 1.7, undefined]) {
+    const fake = createFakeJev({ "Looks fine": { responsive: { choice: "RESPONSIVE", confidence } } });
+    const j = createJudge({ jev: fake });
+    const v = await j.judge({ received: PLAN, reply: "Sure. Looks fine to me overall." });
+    assert.equal(v.decision, "UNCLEAR", `confidence=${String(confidence)}`);
+    assert.equal(v.rule, "typed_invalid");
+    assert.equal(v.escalate, true);
+    assert.equal(v.confidence, 0);
+  }
+});
+
+test("an off-schema choice is also typed_invalid and escalates", async () => {
+  const fake = createFakeJev({ "x": { responsive: { choice: "MAYBE_LATER", confidence: 0.99 } } });
+  const j = createJudge({ jev: fake });
+  const v = await j.judge({ received: PLAN, reply: "x y z nothing in common at all here" });
+  assert.equal(v.decision, "UNCLEAR");
+  assert.equal(v.rule, "typed_invalid");
+  assert.equal(v.escalate, true);
+});
+
+test("maxJevCalls caps typed spend; past the cap the judge declines instead of calling", async () => {
+  const fake = createFakeJev({ "Looks fine": answer("RESPONSIVE", 0.9) });
+  const j = createJudge({ jev: fake, maxJevCalls: 1 });
+  const first = await j.judge({ received: PLAN, reply: "Sure. Looks fine to me overall." });
+  const second = await j.judge({ received: PLAN, reply: "Sure. Looks fine to me overall." });
+  assert.equal(first.via, "jev");
+  assert.equal(second.decision, "UNCLEAR");
+  assert.equal(second.rule, "jev_budget");
+  assert.equal(second.needsJev, true);
+  assert.equal(second.escalate, true);
+  assert.equal(fake.callCount(), 1);
+  assert.equal(j.stats().jev, 1);
+});
+
 test("stats report how much of the traffic stayed free", async () => {
   const fake = createFakeJev();
   const j = createJudge({ jev: fake });
