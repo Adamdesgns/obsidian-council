@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store.mjs";
-import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt } from "../src/deliberation.mjs";
+import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt } from "../src/deliberation.mjs";
 import { createOutbox } from "../src/outbox.mjs";
 import { setSeats } from "../src/seats.mjs";
 import { spawnMember } from "../src/adapters/spawn.mjs";
@@ -388,4 +388,233 @@ describe("startDeliberation", () => {
     assert.match(p, /independently/);
     assert.match(p, /No other member's answer/);
   });
+});
+
+describe("advanceOnReply", () => {
+  const LIMITS = { daily_ceiling: { anthropic: 10, codex: 15 } };
+  const rowOf = (store, id) => store.prepare("SELECT * FROM deliberations WHERE id = ?").get(id);
+  const answersOf = (store, id) => JSON.parse(rowOf(store, id).answers);
+  const msgs = (store) => store.prepare("SELECT * FROM messages ORDER BY created ASC, rowid ASC").all();
+  const latestTo = (store, m) => store.prepare("SELECT * FROM messages WHERE recipients LIKE ? ORDER BY created DESC, rowid DESC").get(`%"${m}"%`);
+  const events = (store, kind) => store.getEvents().filter((e) => e.kind === kind);
+
+  const withDelib = (fn) => withStore((store) => {
+    const outbox = createOutbox(store);
+    try {
+      const r = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+      return fn({ store, outbox, id: r.id, first: msgs(store)[0] });
+    } finally { try { outbox.close(); } catch { /* */ } }
+  });
+  // Drive both blind answers; returns the two debate-round-1 packets.
+  const toDebate = (ctx) => {
+    advanceOnReply(ctx.store, ctx.outbox, { message: ctx.first, member: "codex", text: "A" });
+    advanceOnReply(ctx.store, ctx.outbox, { message: latestTo(ctx.store, "fable"), member: "fable", text: "B" });
+  };
+  const reply = (ctx, m, text) => advanceOnReply(ctx.store, ctx.outbox, { message: latestTo(ctx.store, m), member: m, text });
+
+  it("moves to answer_2 and does NOT leak the first answer", () => withDelib((ctx) => {
+    const out = advanceOnReply(ctx.store, ctx.outbox, { message: ctx.first, member: "codex", text: "cache it in memory" });
+    assert.deepEqual(out, { state: "answer_2", round: 0, flag: null });
+
+    const second = msgs(ctx.store).at(-1);
+    assert.deepEqual(JSON.parse(second.recipients), ["fable"]);
+    assert.equal(second.content.includes("cache it in memory"), false, "the second deliberator must not see the first answer");
+    assert.equal(second.content, blindPrompt("q"), "round one stays blind: the question and nothing else");
+    assert.equal(second.kind, "deliberate");
+    assert.equal(second.idempotency_key, deliberationKey(ctx.id, "answer_2", 0, "fable"));
+    assert.equal(second.sender, "codex", "engine packets carry the member whose reply produced them, never owner (plan Decision 2 / Task 12)");
+    assert.equal(second.parent_id, ctx.first.id, "linked to the packet that was answered");
+    assert.equal(msgs(ctx.store).length, 2);
+
+    const row = rowOf(ctx.store, ctx.id);
+    assert.equal(row.state, "answer_2");
+    assert.equal(row.round, 0);
+    assert.equal(answersOf(ctx.store, ctx.id).codex, "cache it in memory");
+  }));
+
+  it("the second blind answer opens debate round 1: both deliberators get both answers, labelled, with the verdict protocol", () => withDelib((ctx) => {
+    toDebate(ctx);
+    const row = rowOf(ctx.store, ctx.id);
+    assert.equal(row.state, "debate");
+    assert.equal(row.round, 1);
+    const all = msgs(ctx.store);
+    assert.equal(all.length, 4, "1 blind + 1 blind + 2 debate packets");
+    const debate = all.slice(2);
+    assert.deepEqual(debate.map((m) => JSON.parse(m.recipients)[0]).sort(), ["codex", "fable"]);
+    for (const m of debate) {
+      assert.equal(m.content, debatePrompt("q", { codex: "A", fable: "B" }, 1));
+      assert.match(m.content, /--- codex ---\nA\n/);
+      assert.match(m.content, /--- fable ---\nB\n/);
+      assert.match(m.content, /round 1 of 3/);
+      assert.match(m.content, /AGREE: <the answer you both now hold>/);
+      assert.equal(m.sender, "fable", "fable's answer completed the blind phase");
+      assert.equal(m.idempotency_key, deliberationKey(ctx.id, "debate", 1, JSON.parse(m.recipients)[0]));
+    }
+    const a = answersOf(ctx.store, ctx.id);
+    assert.deepEqual({ codex: a.codex, fable: a.fable, __verdicts: a.__verdicts }, { codex: "A", fable: "B", __verdicts: {} });
+  }));
+
+  it("both AGREE in round 1 settles to pending_owner", () => withDelib((ctx) => {
+    toDebate(ctx);
+    const half = reply(ctx, "codex", "fine by me\nAGREE: cache it");
+    assert.deepEqual(half, { state: "debate", round: 1, flag: null }, "waiting for the other verdict");
+    assert.equal(msgs(ctx.store).length, 4, "no new packets while waiting");
+    const done = reply(ctx, "fable", "yes\nAGREE: cache it");
+    assert.deepEqual(done, { state: "pending_owner", round: 1, flag: "agreed" });
+    const row = rowOf(ctx.store, ctx.id);
+    assert.equal(row.state, "pending_owner");
+    assert.equal(row.flag, "agreed");
+    assert.equal(row.final_answer, "cache it");
+    assert.equal(msgs(ctx.store).length, 4, "nothing more is sent once it is in the Black Seat");
+    assert.deepEqual(answersOf(ctx.store, ctx.id).__verdicts, { codex: "AGREE", fable: "AGREE" });
+  }));
+
+  it("ESCALATE short-circuits straight to pending_owner; no answer is proposed, the reason is kept", () => withDelib((ctx) => {
+    toDebate(ctx);
+    const out = reply(ctx, "codex", "ESCALATE: this would delete data");
+    assert.deepEqual(out, { state: "pending_owner", round: 1, flag: "escalated" });
+    const row = rowOf(ctx.store, ctx.id);
+    assert.equal(row.state, "pending_owner");
+    assert.equal(row.flag, "escalated");
+    assert.equal(row.final_answer, null, "an escalation reason is not an answer for the owner to approve");
+    assert.deepEqual(answersOf(ctx.store, ctx.id).__escalation, { member: "codex", body: "this would delete data", round: 1 });
+    assert.equal(msgs(ctx.store).length, 4);
+    // fable's late reply to the same round is ignored: the row is already with the owner.
+    assert.equal(reply(ctx, "fable", "AGREE: whatever"), null);
+    assert.equal(rowOf(ctx.store, ctx.id).flag, "escalated");
+  }));
+
+  it("DISAGREE opens the next round with fresh verdicts and new packets; three rounds without agreement is a deadlock", () => withDelib((ctx) => {
+    toDebate(ctx);
+    // round 1
+    reply(ctx, "codex", "no\nDISAGREE: too slow");
+    let out = reply(ctx, "fable", "AGREE: cache it");
+    assert.deepEqual(out, { state: "debate", round: 2, flag: null }, "one AGREE is not agreement");
+    assert.equal(msgs(ctx.store).length, 6);
+    const r2 = latestTo(ctx.store, "codex");
+    assert.match(r2.content, /round 2 of 3/);
+    assert.match(r2.content, /--- codex ---\nno\nDISAGREE: too slow/, "round 2 shows the latest replies, verdict lines included");
+    assert.equal(r2.idempotency_key, deliberationKey(ctx.id, "debate", 2, "codex"));
+    assert.deepEqual(answersOf(ctx.store, ctx.id).__verdicts, {}, "fresh verdicts each round");
+    // round 2
+    reply(ctx, "codex", "DISAGREE: still slow");
+    out = reply(ctx, "fable", "DISAGREE: fine, then no");
+    assert.deepEqual(out, { state: "debate", round: 3, flag: null });
+    assert.equal(msgs(ctx.store).length, 8);
+    // round 3 — the cap
+    reply(ctx, "codex", "DISAGREE: no");
+    out = reply(ctx, "fable", "DISAGREE: no");
+    assert.deepEqual(out, { state: "pending_owner", round: 3, flag: "deadlock" });
+    const row = rowOf(ctx.store, ctx.id);
+    assert.equal(row.state, "pending_owner");
+    assert.equal(row.flag, "deadlock");
+    assert.equal(row.final_answer, null);
+    assert.equal(row.round, 3);
+    assert.equal(msgs(ctx.store).length, 8, "no round 4");
+    assert.equal(MAX_ROUNDS, 3);
+  }));
+
+  it("a malformed verdict line counts as DISAGREE, never as agreement", () => withDelib((ctx) => {
+    toDebate(ctx);
+    reply(ctx, "codex", "AGREE: cache it");
+    const out = reply(ctx, "fable", "Sounds good, agree: cache it");
+    assert.deepEqual(out, { state: "debate", round: 2, flag: null });
+    assert.equal(rowOf(ctx.store, ctx.id).state, "debate");
+  }));
+
+  it("the blind answers survive in __history after debate replies overwrite the latest text", () => withDelib((ctx) => {
+    toDebate(ctx);
+    reply(ctx, "codex", "AGREE: cache it");
+    reply(ctx, "fable", "AGREE: cache it");
+    const a = answersOf(ctx.store, ctx.id);
+    assert.equal(a.codex, "AGREE: cache it", "latest text per member, as the plan's shape has it");
+    assert.deepEqual(
+      a.__history.map((h) => [h.state, h.round, h.member, h.text, h.verdict ?? null]),
+      [
+        ["answer_1", 0, "codex", "A", null],
+        ["answer_2", 0, "fable", "B", null],
+        ["debate", 1, "codex", "AGREE: cache it", "AGREE"],
+        ["debate", 1, "fable", "AGREE: cache it", "AGREE"],
+      ]
+    );
+  }));
+
+  it("stale, misrouted and duplicate replies are ignored without writing", () => withDelib((ctx) => {
+    // Not a deliberation message at all.
+    assert.equal(advanceOnReply(ctx.store, ctx.outbox, { message: { idempotency_key: "owner-say:1" }, member: "codex", text: "x" }), null);
+    assert.equal(advanceOnReply(ctx.store, ctx.outbox, { message: null, member: "codex", text: "x" }), null);
+    // Wrong member answering the first packet.
+    assert.equal(advanceOnReply(ctx.store, ctx.outbox, { message: ctx.first, member: "fable", text: "x" }), null);
+    assert.equal(rowOf(ctx.store, ctx.id).state, "answer_1");
+    const before = ctx.store.getEvents().length;
+    toDebate(ctx);
+    // A late re-delivery of the answer_1 packet after the row has moved on.
+    assert.equal(advanceOnReply(ctx.store, ctx.outbox, { message: ctx.first, member: "codex", text: "again" }), null);
+    assert.equal(rowOf(ctx.store, ctx.id).round, 1);
+    assert.equal(answersOf(ctx.store, ctx.id).codex, "A");
+    // Duplicate verdict from the same member in the same round: idempotent.
+    reply(ctx, "codex", "AGREE: cache it");
+    const evBefore = ctx.store.getEvents().length;
+    const dup = reply(ctx, "codex", "DISAGREE: changed my mind");
+    assert.deepEqual(dup, { state: "debate", round: 1, flag: null });
+    assert.equal(ctx.store.getEvents().length, evBefore, "no write for a duplicate");
+    assert.equal(answersOf(ctx.store, ctx.id).__verdicts.codex, "AGREE", "first verdict stands");
+    assert.ok(ctx.store.getEvents().length > before);
+  }));
+
+  it("terminal and owner-held states ignore replies", () => withDelib((ctx) => {
+    toDebate(ctx);
+    reply(ctx, "codex", "AGREE: x");
+    reply(ctx, "fable", "AGREE: x");
+    assert.equal(rowOf(ctx.store, ctx.id).state, "pending_owner");
+    assert.equal(reply(ctx, "codex", "DISAGREE: wait"), null);
+    for (const state of ["settled", "overruled", "abandoned", "stalled"]) {
+      ctx.store.prepare("UPDATE deliberations SET state = ? WHERE id = ?").run(state, ctx.id);
+      assert.equal(reply(ctx, "codex", "AGREE: x"), null, state);
+    }
+  }));
+
+  it("findDeliberationFor resolves from the claimed message's key; parseDeliberationKey is strict", () => withDelib((ctx) => {
+    assert.equal(findDeliberationFor(ctx.store, ctx.first).id, ctx.id);
+    assert.equal(findDeliberationFor(ctx.store, { idempotency_key: "delib:nope:answer_1:0:codex" }), null);
+    assert.equal(findDeliberationFor(ctx.store, { idempotency_key: "owner-say:x" }), null);
+    assert.equal(findDeliberationFor(ctx.store, null), null);
+    assert.deepEqual(parseDeliberationKey("delib:d1:debate:2:fable"), { id: "d1", state: "debate", round: 2, member: "fable" });
+    assert.equal(parseDeliberationKey("delib:d1:debate"), null);
+    assert.equal(parseDeliberationKey("delib:d1:debate:x:fable"), null);
+    assert.equal(parseDeliberationKey(42), null);
+  }));
+
+  it("every transition is one deliberation_advanced event and the chain verifies; no model run is ever recorded here", () => withDelib((ctx) => {
+    toDebate(ctx);
+    reply(ctx, "codex", "AGREE: x");
+    reply(ctx, "fable", "AGREE: x");
+    const adv = events(ctx.store, "deliberation_advanced");
+    assert.equal(adv.length, 4, "answer_1->answer_2, answer_2->debate, half-round, agreed");
+    assert.deepEqual(adv.map((e) => JSON.parse(e.payload).state ?? null), ["answer_2", "debate", null, "pending_owner"]);
+    assert.ok(adv.every((e) => e.actor === "dispatcher" && e.ref_id === ctx.id));
+    assert.equal(ctx.store.verifyChain().ok, true);
+    assert.equal(ctx.store.prepare("SELECT COUNT(*) AS c FROM runs").get().c, 0);
+  }));
+
+  it("abandon marks the row and records why; terminal rows are left alone", () => withDelib((ctx) => {
+    const out = abandon(ctx.store, ctx.id, "halt");
+    assert.deepEqual(out, { id: ctx.id, reason: "halt", changed: true });
+    const row = rowOf(ctx.store, ctx.id);
+    assert.equal(row.state, "abandoned");
+    assert.equal(row.flag, "halt");
+    const ev = events(ctx.store, "deliberation_abandoned");
+    assert.equal(ev.length, 1);
+    assert.deepEqual(JSON.parse(ev[0].payload), { abandoned: "halt" });
+    assert.deepEqual(abandon(ctx.store, ctx.id, "again"), { id: ctx.id, reason: "again", changed: false });
+    assert.equal(rowOf(ctx.store, ctx.id).flag, "halt", "first reason stands");
+    for (const state of ["settled", "overruled"]) {
+      ctx.store.prepare("UPDATE deliberations SET state = ?, flag = NULL WHERE id = ?").run(state, ctx.id);
+      assert.equal(abandon(ctx.store, ctx.id, "halt").changed, false, state);
+      assert.equal(rowOf(ctx.store, ctx.id).state, state);
+    }
+    // pending_owner may still be cancelled by the owner.
+    ctx.store.prepare("UPDATE deliberations SET state = 'pending_owner' WHERE id = ?").run(ctx.id);
+    assert.equal(abandon(ctx.store, ctx.id, "owner_cancel").changed, true);
+  }));
 });
