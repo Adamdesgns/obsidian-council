@@ -674,13 +674,13 @@ git commit -m "verdict: strict parser, malformed counts as disagreement"
 
 ---
 
-## Task 6: The deliberations table
+## Task 6: The deliberations table — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Reminder from Global Constraints: migrations are tracked by filename only, so a dev `council.db` that already applied `003` must be deleted if the file is edited later.
 
 **Files:**
 - Create: `src/migrations/003_deliberations.sql`
 - Test: `test/deliberation.test.mjs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 // test/deliberation.test.mjs
@@ -713,12 +713,12 @@ describe("deliberations schema", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: FAIL — `expected undefined to equal 'deliberations'`
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 No `BEGIN`/`COMMIT` — the runner wraps it.
 
@@ -749,12 +749,12 @@ CREATE INDEX IF NOT EXISTS idx_delib_chamber ON deliberations(chamber_id);
 
 `deliberators` and `answers` are **JSON strings written with an explicit `JSON.stringify`**. Do not pass objects to `setRef` expecting them to land here — `setRef` stringifies into the *event payload*, not the row.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/deliberation.test.mjs`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/migrations/003_deliberations.sql test/deliberation.test.mjs
