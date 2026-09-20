@@ -458,7 +458,7 @@ git commit -m "limits: enforce daily ceilings per real account, not per seat"
 
 ---
 
-## Task 4: Backfill tokens for new seats
+## Task 4: Backfill tokens for new seats — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Deviation: a corrupt or non-object `tokens.json` is refused with a clear error and left on disk rather than replaced with a fresh owner token.
 
 `src/tokens.mjs:17` returns early when `tokens.json` exists, so adding `fable` gives it **no token on any existing home** — including the real one. The seat is then mute: `prepareBridge` returns a no-op and `identityFromToken` never resolves it.
 
@@ -478,7 +478,7 @@ git commit -m "limits: enforce daily ceilings per real account, not per seat"
 
 `identityFromToken` (`tokens.mjs:33-38`) iterates `tokens.members`, so a backfilled seat must land **inside `members`**, not at the top level.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import { writeFileSync, readFileSync } from "node:fs";
@@ -522,12 +522,12 @@ describe("token backfill", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/seats.test.mjs`
 Expected: FAIL — `fable must get a token`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/tokens.mjs`, delete the `MEMBERS` constant at `:7` and replace `loadOrCreateTokens` entirely. The early return at `:16-18` is what strands new seats:
 
@@ -566,12 +566,12 @@ export function loadOrCreateTokens(home = councilHome()) {
 }
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `node --test`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/tokens.mjs test/seats.test.mjs
