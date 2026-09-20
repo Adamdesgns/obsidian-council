@@ -7,7 +7,10 @@ import { openStore } from "./store.mjs";
 import { createOutbox } from "./outbox.mjs";
 import { councilHome, ensureHome } from "./home.mjs";
 import { loadOrCreateTokens, identityFromToken, parseBearer } from "./tokens.mjs";
-import { routeOwnerSay } from "./routing.mjs";
+import { routeOwnerSay, defaultBroadcast } from "./routing.mjs";
+import { contentHash, assertSanction, markUsed } from "./sanctions.mjs";
+import { startDeliberation } from "./deliberation.mjs";
+import { loadLimits } from "./adapters/spawn.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
@@ -80,8 +83,20 @@ export function createApi(opts = {}) {
   const store = opts.store || openStore({ home });
   const outbox = opts.outbox || createOutbox(store, { leaseMs: config.lease_ms });
   const tokens = opts.tokens || loadOrCreateTokens(home);
+  const limits = opts.limits || loadLimits();
   const sseClients = new Set();
   let halt = existsSync(join(home, "HALT"));
+
+  /** Row as the Floor should see it: JSON columns parsed, nothing else changed. */
+  function deliberationView(row) {
+    const parse = (v, dflt) => { try { return v == null ? dflt : JSON.parse(v); } catch { return dflt; } };
+    return {
+      ...row,
+      deliberators: parse(row.deliberators, []),
+      answers: parse(row.answers, {}),
+      stall_detail: parse(row.stall_detail, null),
+    };
+  }
 
   // Seed default members
   store.commit("api_boot", "system", (api) => {
@@ -350,6 +365,11 @@ export function createApi(opts = {}) {
 
     if (req.method === "POST" && path === "/owner/sanction") {
       const body = await readBody(req);
+      // Never trust a client-supplied hash when the content itself is here —
+      // derive it from what is actually being approved. Hash-only (the Floor's
+      // current form) is still accepted.
+      const hash = body.content != null ? contentHash(body.content) : String(body.content_hash || "").trim();
+      if (!hash) return sendJson(res, 400, { error: "content or content_hash required" });
       const committed = store.commit("sanction_decided", "owner", (api) => {
         const id = body.id || api.uuid();
         api.prepare(
@@ -358,7 +378,7 @@ export function createApi(opts = {}) {
         ).run(
           id,
           body.directive_id ?? null,
-          body.content_hash,
+          hash,
           typeof body.scopes === "string" ? body.scopes : JSON.stringify(body.scopes || []),
           "owner",
           api.nowIso(),
@@ -366,10 +386,83 @@ export function createApi(opts = {}) {
           null,
           body.status || (body.approve === false ? "rejected" : "approved")
         );
-        api.setRef("sanctions", id, { content_hash: body.content_hash, status: body.status || "approved" });
-        return { id };
+        api.setRef("sanctions", id, { content_hash: hash, status: body.status || "approved" });
+        return { id, content_hash: hash };
       });
       return sendJson(res, 200, committed.result);
+    }
+
+    // Deliberation Engine (Task 13). Same owner token and loopback checks as
+    // every /owner/* route; the engine itself decides what is startable.
+    if (req.method === "POST" && path === "/owner/deliberate") {
+      const body = await readBody(req);
+      const r = startDeliberation(store, outbox, {
+        chamber_id: body.chamber_id ?? null,
+        question: body.content ?? body.question ?? "",
+        deliberators: body.deliberators || defaultBroadcast(),
+        category: body.category ?? null,
+        limits,
+      });
+      if (r.ok) {
+        broadcast({ type: "deliberate", id: r.id, state: r.state });
+        return sendJson(res, 200, r);
+      }
+      // Budget is a 409 (try later); everything else is the caller's request.
+      return sendJson(res, r.reason === "insufficient_budget" ? 409 : 400, r);
+    }
+
+    if (path.startsWith("/owner/deliberation/")) {
+      const [id, action, ...more] = path.slice("/owner/deliberation/".length).split("/");
+      if (!id || more.length) return sendJson(res, 404, { error: "not_found" });
+      const row = store.prepare("SELECT * FROM deliberations WHERE id = ?").get(id);
+      if (!row) return sendJson(res, 404, { error: "no such deliberation" });
+
+      if (req.method === "GET" && !action) return sendJson(res, 200, deliberationView(row));
+
+      if (req.method === "POST" && action === "approve") {
+        if (row.state !== "pending_owner") {
+          return sendJson(res, 409, { ok: false, reason: "not_pending", state: row.state });
+        }
+        // escalated and deadlock rows carry no agreed answer: the owner writes
+        // their own (overrule). Hashing NULL would gate the string "null".
+        if (row.final_answer == null || row.final_answer === "") {
+          return sendJson(res, 409, { ok: false, reason: "no_answer_to_approve", flag: row.flag });
+        }
+        const gate = assertSanction(store, { content: row.final_answer, actor: "owner" });
+        if (!gate.ok) return sendJson(res, 403, gate);
+        markUsed(store, gate.sanction.id, "owner");
+        const hash = contentHash(row.final_answer);
+        const out = store.commit("deliberation_settled", "owner", (api) => {
+          api.prepare(
+            "UPDATE deliberations SET state='settled', content_hash=?, updated=? WHERE id=? AND state='pending_owner'"
+          ).run(hash, api.nowIso(), id);
+          api.setRef("deliberations", id, { settled: true, content_hash: hash, sanction_id: gate.sanction.id });
+          return { id, state: "settled", content_hash: hash, sanction_id: gate.sanction.id };
+        });
+        broadcast({ type: "deliberation", id, state: "settled" });
+        return sendJson(res, 200, out.result);
+      }
+
+      if (req.method === "POST" && action === "overrule") {
+        if (["settled", "overruled", "abandoned"].includes(row.state)) {
+          return sendJson(res, 409, { ok: false, reason: "closed", state: row.state });
+        }
+        const body = await readBody(req);
+        const content = typeof body.content === "string" ? body.content.trim() : "";
+        if (!content) return sendJson(res, 400, { error: "content required" });
+        const hash = contentHash(content);
+        const out = store.commit("deliberation_overruled", "owner", (api) => {
+          api.prepare(
+            "UPDATE deliberations SET state='overruled', final_answer=?, content_hash=?, updated=? WHERE id=?"
+          ).run(content, hash, api.nowIso(), id);
+          api.setRef("deliberations", id, { overruled: true, from_state: row.state, content_hash: hash });
+          return { id, state: "overruled", content_hash: hash };
+        });
+        broadcast({ type: "deliberation", id, state: "overruled" });
+        return sendJson(res, 200, out.result);
+      }
+
+      return sendJson(res, 404, { error: "not_found" });
     }
 
     if (req.method === "POST" && path === "/owner/halt") {

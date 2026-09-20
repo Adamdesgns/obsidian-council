@@ -9,6 +9,9 @@ import { openStore } from "../src/store.mjs";
 import { preflight, RUNS_PER_DELIBERATOR, MAX_ROUNDS, startDeliberation, deliberationKey, blindPrompt, advanceOnReply, findDeliberationFor, parseDeliberationKey, abandon, debatePrompt, stall } from "../src/deliberation.mjs";
 import { createOutbox } from "../src/outbox.mjs";
 import { createDispatcher } from "../src/dispatcher.mjs";
+import http from "node:http";
+import { createApi } from "../src/api.mjs";
+import { assertSanction, contentHash } from "../src/sanctions.mjs";
 import { setSeats } from "../src/seats.mjs";
 import { spawnMember } from "../src/adapters/spawn.mjs";
 
@@ -1006,4 +1009,257 @@ describe("cap exemption for engine traffic", () => {
       assert.ok(runs <= 1 + LIMITS.dispatcher.max_auto_replies_per_owner_turn + 2, `bounded runs, got ${runs}`);
     });
   });
+});
+
+describe("owner gate", () => {
+  it("approval requires a sanction whose hash matches the final answer (standalone gate)", () => withStore((store) => {
+    const answer = "cache the chain in memory";
+    const hash = contentHash(answer);
+    store.commit("sanction_decided", "owner", (api) => {
+      api.prepare(`INSERT INTO sanctions(id, content_hash, decided_by, decided_at, status) VALUES(?,?,?,?,?)`)
+        .run(api.uuid(), hash, "owner", api.nowIso(), "approved");
+    });
+    assert.equal(assertSanction(store, { content: answer, actor: "owner" }).ok, true);
+    assert.equal(assertSanction(store, { content: "something else", actor: "owner" }).ok, false);
+    assert.equal(assertSanction(store, { content: answer, actor: "codex" }).reason, "member_cannot_approve");
+  }));
+
+  const LIMITS = { daily_ceiling: { anthropic: 10, codex: 15, grok: 15 }, timeout_ms: { fake: 3000 } };
+
+  async function withApi(fn, apiOpts = {}) {
+    const home = tempHome();
+    process.env.COUNCIL_HOME = home;
+    const api = createApi({ home, config: { host: "127.0.0.1", port: 0 }, limits: LIMITS, ...apiOpts });
+    await new Promise((resolve, reject) => { api.server.listen(0, "127.0.0.1", resolve); api.server.once("error", reject); });
+    const port = api.server.address().port;
+    const owner = api.tokens.owner;
+    const member = api.tokens.members.codex;
+    // node:http, not fetch: fetch silently drops a caller-supplied Host header,
+    // which would make the loopback assertions below pass for the wrong reason.
+    function req({ method = "GET", path = "/", token = owner, headers = {}, body } = {}) {
+      return new Promise((resolve, reject) => {
+        const h = { Host: `127.0.0.1:${port}`, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers };
+        const payload = body !== undefined ? JSON.stringify(body) : null;
+        if (payload != null) { h["Content-Type"] = "application/json"; h["Content-Length"] = Buffer.byteLength(payload); }
+        const request = http.request({ host: "127.0.0.1", port, path, method, headers: h }, (res) => {
+          let text = "";
+          res.on("data", (c) => { text += c; });
+          res.on("end", () => { let json = null; try { json = JSON.parse(text); } catch { /* raw */ } resolve({ status: res.statusCode, json, text }); });
+        });
+        request.on("error", reject);
+        if (payload != null) request.write(payload);
+        request.end();
+      });
+    }
+    try {
+      return await fn({ api, req, owner, member, store: api.store, outbox: api.outbox });
+    } finally {
+      try { await api.close(); } catch { /* */ }
+      await new Promise((r) => setTimeout(r, 50));
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
+  const rowOf = (store, id) => store.prepare("SELECT * FROM deliberations WHERE id = ?").get(id);
+  const latestTo = (store, m) => store.prepare("SELECT * FROM messages WHERE recipients LIKE ? ORDER BY created DESC, rowid DESC").get(`%"${m}"%`);
+  // Drive a row from answer_1 to pending_owner without a dispatcher.
+  function settleTo(store, outbox, id, flag) {
+    const first = store.prepare("SELECT * FROM messages WHERE idempotency_key = ?").get(deliberationKey(id, "answer_1", 0, "codex"));
+    advanceOnReply(store, outbox, { message: first, member: "codex", text: "A" });
+    advanceOnReply(store, outbox, { message: latestTo(store, "fable"), member: "fable", text: "B" });
+    if (flag === "agreed") {
+      advanceOnReply(store, outbox, { message: latestTo(store, "codex"), member: "codex", text: "AGREE: cache the chain in memory" });
+      advanceOnReply(store, outbox, { message: latestTo(store, "fable"), member: "fable", text: "AGREE: cache the chain in memory" });
+    } else if (flag === "escalated") {
+      advanceOnReply(store, outbox, { message: latestTo(store, "codex"), member: "codex", text: "ESCALATE: this deletes data" });
+    } else if (flag === "deadlock") {
+      for (let r = 0; r < 3; r++) {
+        advanceOnReply(store, outbox, { message: latestTo(store, "codex"), member: "codex", text: "DISAGREE: no" });
+        advanceOnReply(store, outbox, { message: latestTo(store, "fable"), member: "fable", text: "DISAGREE: no" });
+      }
+    }
+    const row = rowOf(store, id);
+    assert.equal(row.state, "pending_owner", `setup: ${JSON.stringify(row)}`);
+    assert.equal(row.flag, flag);
+    return row;
+  }
+
+  it("POST /owner/sanction hashes server-side from content; a client hash is accepted only when no content is given; neither is 400", () => withApi(async ({ req, store }) => {
+    const a = await req({ method: "POST", path: "/owner/sanction", body: { content: "cache the chain in memory" } });
+    assert.equal(a.status, 200);
+    assert.equal(store.prepare("SELECT content_hash FROM sanctions WHERE id = ?").get(a.json.id).content_hash, contentHash("cache the chain in memory"));
+    // Client-supplied hash alongside content is ignored: the server derives it.
+    const b = await req({ method: "POST", path: "/owner/sanction", body: { content: "x", content_hash: "f".repeat(64) } });
+    assert.equal(store.prepare("SELECT content_hash FROM sanctions WHERE id = ?").get(b.json.id).content_hash, contentHash("x"));
+    // The Floor's existing shape (hash only) still works.
+    const c = await req({ method: "POST", path: "/owner/sanction", body: { content_hash: "a".repeat(64), status: "approved" } });
+    assert.equal(c.status, 200);
+    assert.equal(store.prepare("SELECT content_hash FROM sanctions WHERE id = ?").get(c.json.id).content_hash, "a".repeat(64));
+    const d = await req({ method: "POST", path: "/owner/sanction", body: { status: "approved" } });
+    assert.equal(d.status, 400);
+    assert.match(d.json.error, /content or content_hash required/);
+  }));
+
+  it("POST /owner/deliberate opens a row and asks the first deliberator; validation is 400, budget is 409", () => withApi(async ({ req, store }) => {
+    const ok = await req({ method: "POST", path: "/owner/deliberate", body: { chamber_id: "c1", content: "cache the chain?" } });
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(ok.json.ok, true);
+    assert.equal(ok.json.state, "answer_1");
+    const row = rowOf(store, ok.json.id);
+    assert.deepEqual(JSON.parse(row.deliberators), ["codex", "fable"], "defaults to the role-derived deliberators");
+    assert.equal(row.question, "cache the chain?");
+    const msg = store.prepare("SELECT * FROM messages").get();
+    assert.deepEqual(JSON.parse(msg.recipients), ["codex"]);
+    assert.equal(msg.idempotency_key, deliberationKey(ok.json.id, "answer_1", 0, "codex"));
+
+    const empty = await req({ method: "POST", path: "/owner/deliberate", body: { chamber_id: "c1", content: "   " } });
+    assert.equal(empty.status, 400);
+    assert.equal(empty.json.reason, "empty_question");
+    const bad = await req({ method: "POST", path: "/owner/deliberate", body: { question: "q", deliberators: ["codex", "owner"] } });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json.reason, "unknown_seat");
+    const dup = await req({ method: "POST", path: "/owner/deliberate", body: { question: "q", deliberators: ["codex", "codex"] } });
+    assert.equal(dup.status, 400);
+    assert.equal(dup.json.reason, "duplicate_deliberator");
+    // Explicit pair, explicit category.
+    const pinned = await req({ method: "POST", path: "/owner/deliberate", body: { question: "q2", deliberators: ["fable", "codex"], category: "routine" } });
+    assert.equal(pinned.status, 200);
+    assert.equal(rowOf(store, pinned.json.id).category, "routine");
+    assert.deepEqual(JSON.parse(rowOf(store, pinned.json.id).deliberators), ["fable", "codex"]);
+    // Budget short -> 409 with the preflight detail; nothing written.
+    const now = new Date().toISOString();
+    for (let i = 0; i < 8; i++) {
+      store.prepare(`INSERT INTO runs(id, member, chamber_id, message_id, argv, started) VALUES(?,?,?,?,?,?)`).run(`r${i}`, "claude", "c1", null, "[]", now);
+    }
+    const before = store.prepare("SELECT COUNT(*) AS c FROM deliberations").get().c;
+    const short = await req({ method: "POST", path: "/owner/deliberate", body: { question: "q3" } });
+    assert.equal(short.status, 409);
+    assert.equal(short.json.reason, "insufficient_budget");
+    assert.equal(short.json.account, "anthropic");
+    assert.equal(store.prepare("SELECT COUNT(*) AS c FROM deliberations").get().c, before);
+  }));
+
+  it("the routes sit behind the owner gate and the loopback checks", () => withApi(async ({ req, member, store, outbox }) => {
+    const r = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    for (const [method, path, body] of [
+      ["POST", "/owner/deliberate", { question: "q" }],
+      ["GET", `/owner/deliberation/${r.id}`, undefined],
+      ["POST", `/owner/deliberation/${r.id}/approve`, {}],
+      ["POST", `/owner/deliberation/${r.id}/overrule`, { content: "x" }],
+    ]) {
+      const asMember = await req({ method, path, token: member, body });
+      assert.equal(asMember.status, 403, `${method} ${path} with a member token`);
+      assert.equal(asMember.json.error, "owner_only");
+      const noToken = await req({ method, path, token: null, body });
+      assert.equal(noToken.status, 401, `${method} ${path} without a token`);
+      const evil = await req({ method, path, body, headers: { Host: "evil.example" } });
+      assert.equal(evil.status, 403, `${method} ${path} from a non-loopback Host`);
+      assert.equal(evil.json.error, "loopback_only");
+    }
+    assert.equal(rowOf(store, r.id).state, "answer_1", "nothing moved");
+  }));
+
+  it("GET /owner/deliberation/:id returns the row with JSON columns parsed; unknown id is 404", () => withApi(async ({ req, store, outbox }) => {
+    const r = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    const got = await req({ path: `/owner/deliberation/${r.id}` });
+    assert.equal(got.status, 200);
+    assert.equal(got.json.id, r.id);
+    assert.equal(got.json.state, "answer_1");
+    assert.deepEqual(got.json.deliberators, ["codex", "fable"]);
+    assert.deepEqual(got.json.answers, {});
+    assert.equal(got.json.stall_detail, null);
+    const missing = await req({ path: "/owner/deliberation/nope" });
+    assert.equal(missing.status, 404);
+    const badAction = await req({ method: "POST", path: `/owner/deliberation/${r.id}/explode`, body: {} });
+    assert.equal(badAction.status, 404);
+  }));
+
+  it("approve: no sanction 403, wrong hash 403, matching sanction settles once and consumes the sanction", () => withApi(async ({ req, store, outbox }) => {
+    const r = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    settleTo(store, outbox, r.id, "agreed");
+    const answer = rowOf(store, r.id).final_answer;
+    assert.equal(answer, "cache the chain in memory");
+
+    const none = await req({ method: "POST", path: `/owner/deliberation/${r.id}/approve`, body: {} });
+    assert.equal(none.status, 403);
+    assert.equal(none.json.reason, "no_sanction");
+
+    await req({ method: "POST", path: "/owner/sanction", body: { content: "a different answer" } });
+    const wrong = await req({ method: "POST", path: `/owner/deliberation/${r.id}/approve`, body: {} });
+    assert.equal(wrong.status, 403, "a sanction for other content must not approve this answer");
+    assert.equal(rowOf(store, r.id).state, "pending_owner");
+
+    const san = await req({ method: "POST", path: "/owner/sanction", body: { content: answer } });
+    const ok = await req({ method: "POST", path: `/owner/deliberation/${r.id}/approve`, body: {} });
+    assert.equal(ok.status, 200, ok.text);
+    assert.deepEqual(ok.json, { id: r.id, state: "settled", content_hash: contentHash(answer), sanction_id: san.json.id });
+    const row = rowOf(store, r.id);
+    assert.equal(row.state, "settled");
+    assert.equal(row.final_answer, answer);
+    assert.equal(row.content_hash, contentHash(answer));
+    assert.ok(store.prepare("SELECT used_at FROM sanctions WHERE id = ?").get(san.json.id).used_at, "sanction is single-use: used_at set");
+    const kinds = store.getEvents().map((e) => e.kind);
+    assert.ok(kinds.includes("sanction_used") && kinds.includes("deliberation_settled"));
+    assert.equal(store.verifyChain().ok, true);
+
+    const again = await req({ method: "POST", path: `/owner/deliberation/${r.id}/approve`, body: {} });
+    assert.equal(again.status, 409);
+    assert.equal(again.json.reason, "not_pending");
+
+    // The used sanction cannot approve a second deliberation with the same answer.
+    const r2 = startDeliberation(store, outbox, { chamber_id: "c2", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    settleTo(store, outbox, r2.id, "agreed");
+    const reuse = await req({ method: "POST", path: `/owner/deliberation/${r2.id}/approve`, body: {} });
+    assert.equal(reuse.status, 403);
+    assert.equal(reuse.json.reason, "already_used");
+  }));
+
+  it("approve refuses rows with nothing to approve: escalated and deadlock need an overrule; live rows are not pending", () => withApi(async ({ req, store, outbox }) => {
+    const esc = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    settleTo(store, outbox, esc.id, "escalated");
+    await req({ method: "POST", path: "/owner/sanction", body: { content: "null" } }); // a hash of the string "null" must not slip through
+    const e = await req({ method: "POST", path: `/owner/deliberation/${esc.id}/approve`, body: {} });
+    assert.equal(e.status, 409);
+    assert.equal(e.json.reason, "no_answer_to_approve");
+    assert.equal(e.json.flag, "escalated");
+
+    const dl = startDeliberation(store, outbox, { chamber_id: "c2", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    settleTo(store, outbox, dl.id, "deadlock");
+    const d = await req({ method: "POST", path: `/owner/deliberation/${dl.id}/approve`, body: {} });
+    assert.equal(d.status, 409);
+    assert.equal(d.json.reason, "no_answer_to_approve");
+
+    const live = startDeliberation(store, outbox, { chamber_id: "c3", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    const l = await req({ method: "POST", path: `/owner/deliberation/${live.id}/approve`, body: {} });
+    assert.equal(l.status, 409);
+    assert.equal(l.json.reason, "not_pending");
+    assert.equal(l.json.state, "answer_1");
+  }));
+
+  it("overrule replaces the answer with the owner's own, hashes it, and closes the row; empty content is 400; closed rows are 409", () => withApi(async ({ req, store, outbox }) => {
+    const dl = startDeliberation(store, outbox, { chamber_id: "c1", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    settleTo(store, outbox, dl.id, "deadlock");
+    const empty = await req({ method: "POST", path: `/owner/deliberation/${dl.id}/overrule`, body: { content: "  " } });
+    assert.equal(empty.status, 400);
+    assert.equal(rowOf(store, dl.id).state, "pending_owner");
+    const ok = await req({ method: "POST", path: `/owner/deliberation/${dl.id}/overrule`, body: { content: "do neither; cache nothing" } });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(ok.json, { id: dl.id, state: "overruled", content_hash: contentHash("do neither; cache nothing") });
+    const row = rowOf(store, dl.id);
+    assert.equal(row.state, "overruled");
+    assert.equal(row.final_answer, "do neither; cache nothing");
+    assert.equal(row.content_hash, contentHash("do neither; cache nothing"));
+    assert.equal(row.flag, "deadlock", "how it reached the owner is kept");
+    const again = await req({ method: "POST", path: `/owner/deliberation/${dl.id}/overrule`, body: { content: "changed my mind" } });
+    assert.equal(again.status, 409);
+    assert.equal(again.json.reason, "closed");
+    assert.equal(rowOf(store, dl.id).final_answer, "do neither; cache nothing");
+    // The owner may also overrule a stalled row rather than wait for a resume.
+    const st = startDeliberation(store, outbox, { chamber_id: "c2", question: "q", deliberators: ["codex", "fable"], limits: LIMITS });
+    stall(store, st.id, { member: "codex", reason: "exit_1" });
+    const o = await req({ method: "POST", path: `/owner/deliberation/${st.id}/overrule`, body: { content: "owner decides" } });
+    assert.equal(o.status, 200);
+    assert.equal(rowOf(store, st.id).state, "overruled");
+    assert.equal(store.getEvents().filter((e) => e.kind === "deliberation_overruled").length, 2);
+    assert.equal(store.verifyChain().ok, true);
+  }));
 });
