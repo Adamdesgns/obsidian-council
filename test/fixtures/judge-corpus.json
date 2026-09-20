@@ -1,0 +1,86 @@
+[
+  {
+    "id": "plan-ok",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "Plan: 1) create cli.mjs with a shebang. 2) read new Date() and call toISOString(). 3) print the ISO date to stdout. 4) add a --utc flag. 5) add a node --test for the format.",
+    "expected": "responsive"
+  },
+  {
+    "id": "critique-ok",
+    "question": "Critique that plan in at most five numbered points.",
+    "answer": "1. The plan never states which Node version it targets. 2. toISOString() is always UTC, so the --utc flag is redundant. 3. No error handling if stdout is closed. 4. The test should pin the regex for the ISO format. 5. Five lines is fine; the numbered points cover it.",
+    "expected": "responsive"
+  },
+  {
+    "id": "revision-ok",
+    "question": "Revise the plan in five lines using the critique.",
+    "answer": "Revised plan: 1) target Node 24+. 2) cli.mjs prints new Date().toISOString(). 3) drop the --utc flag, ISO output is UTC by definition. 4) guard stdout EPIPE. 5) a node --test asserts the ISO regex against the critique's points.",
+    "expected": "responsive"
+  },
+  {
+    "id": "empty",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "",
+    "expected": "unresponsive"
+  },
+  {
+    "id": "placeholder",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "(empty)",
+    "expected": "unresponsive"
+  },
+  {
+    "id": "refusal",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "I'm sorry, I can't help with that.",
+    "expected": "unresponsive"
+  },
+  {
+    "id": "error-json",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "{\"type\":\"error\",\"message\":\"cannot resume session\",\"refuse_resume\":true}",
+    "expected": "unresponsive"
+  },
+  {
+    "id": "error-stderr",
+    "question": "Critique that plan in at most five numbered points.",
+    "answer": "Error: Failed while loading mcp",
+    "expected": "unresponsive"
+  },
+  {
+    "id": "questions-back",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "Which Node version? Do you want UTC or local time? Should it be a package?",
+    "expected": "unresponsive"
+  },
+  {
+    "id": "too-short",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "Sure thing.",
+    "expected": "uncertain"
+  },
+  {
+    "id": "off-topic-long",
+    "question": "Write a five-line plan for a Node CLI that prints today's date in ISO format.",
+    "answer": "The quarterly budget review moved to Thursday. Please bring the vendor spreadsheets and the signed contracts.",
+    "expected": "uncertain"
+  },
+  {
+    "id": "synonyms-only",
+    "question": "How should the dispatcher handle a member whose daily ceiling is exhausted?",
+    "answer": "Mark the seat blocked, leave the delivery leased so it can be reclaimed tomorrow, and surface the reason on the Floor.",
+    "expected": "uncertain"
+  },
+  {
+    "id": "partial-overlap",
+    "question": "Compare the outbox lease model with the dispatcher hop cap and say which one guards against runaway chains.",
+    "answer": "The hop cap is the guard against runaway chains; leases only bound how long one delivery stays claimed.",
+    "expected": "responsive"
+  },
+  {
+    "id": "yes-no-with-reason",
+    "question": "Should the Floor ever parse @mentions client-side for routing?",
+    "answer": "No. Routing is server-side only; the Floor sends the raw line and the routing contract decides the chain.",
+    "expected": "responsive"
+  }
+]
