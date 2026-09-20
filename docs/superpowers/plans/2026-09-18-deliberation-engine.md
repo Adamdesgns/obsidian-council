@@ -305,7 +305,7 @@ export function parseAddressChain(text) {
 
 `src/dispatcher.mjs` re-exports `parseAddressChain` from `routing.mjs` on the PR head, so existing test imports keep working and the `dispatcher.mjs:482` fallback re-parse inherits the fix automatically.
 
-- [x] **Step 5b: Derive the broadcast default from roles** — `defaultBroadcast()` landed and tested; the `routeOwnerSay` consumer is **deliberately still `DEFAULT_BROADCAST` (codex+grok)** until Task 3. Reason: `council.mjs` runs the dispatcher for codex/grok/claude, so a fable delivery today is a dead letter (the exact defect Step 5 describes), and fable has no daily ceiling until Task 3 keys ceilings by account. PR #1 also pinned codex+grok in `test/chain-routing.http.test.mjs` (d)/(e) to protect the anthropic budget. **Task 3 must flip the consumer and update those two assertions.**
+- [x] **Step 5b: Derive the broadcast default from roles** — `defaultBroadcast()` landed and tested; the `routeOwnerSay` consumer is **deliberately still `DEFAULT_BROADCAST` (codex+grok)** until Task 3. Reason: `council.mjs` runs the dispatcher for codex/grok/claude, so a fable delivery today is a dead letter (the exact defect Step 5 describes), and fable has no daily ceiling until Task 3 keys ceilings by account. PR #1 also pinned codex+grok in `test/chain-routing.http.test.mjs` (d)/(e) to protect the anthropic budget. **Flipped in Task 3** (`routeOwnerSay` → `defaultBroadcast()`, chain-routing (d)/(e) updated, `council.mjs` members = `seatIds()`).
 
 `src/routing.mjs:16` hardcodes `DEFAULT_BROADCAST = ["codex", "grok"]`. Under the seat table that is wrong — `grok` is an executor, not a deliberator. Replace it:
 
@@ -334,7 +334,7 @@ git commit -m "spawn: resolve adapter and model through seatOf"
 
 ---
 
-## Task 3: Per-account daily ceilings
+## Task 3: Per-account daily ceilings — DONE (2026-09-20, `cursor/deliberation-engine-judge-task1-26e9`). Also landed here: the Task 2 Step 5b consumer flip (`routeOwnerSay` → `defaultBroadcast()`, chain-routing (d)/(e) updated), `council.mjs` dispatcher members = `seatIds()`, a peer-seat fallback in `ceilingFor` for member-keyed limits, and `timeoutFor` falling back seat → adapter so fable is not cut at the fake 5 s.
 
 `spawn.mjs:111` reads `limits.daily_ceiling?.[member] ?? limits.daily_ceiling?.fake ?? 100`. A `fable` seat has no key, so it silently gets **100** — while spending the same Anthropic quota as `claude`.
 
@@ -346,7 +346,7 @@ git commit -m "spawn: resolve adapter and model through seatOf"
 **Interfaces:**
 - Produces: `runsTodayForAccount(store, account) -> number` (exported, read-only)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `test/seats.test.mjs`:
 
@@ -380,12 +380,12 @@ describe("per-account ceilings", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/seats.test.mjs`
 Expected: FAIL — `runsTodayForAccount is not a function`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/adapters/spawn.mjs`, add next to the existing private `runsToday` at `:97`:
 
@@ -417,7 +417,7 @@ const ceiling = limits.daily_ceiling?.[account] ?? limits.daily_ceiling?.[member
 const used = runsTodayForAccount(store, account);
 ```
 
-- [ ] **Step 4: Re-key the limits file**
+- [x] **Step 4: Re-key the limits file**
 
 Replace `daily_ceiling` in `config/limits.json` with account keys:
 
@@ -444,12 +444,12 @@ Replace `daily_ceiling` in `config/limits.json` with account keys:
 
 The `?? limits.daily_ceiling?.[member]` fallback keeps every existing test green — those pass member-keyed ceilings inline (e.g. `daily_ceiling: { codex: 100, grok: 100 }`).
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `node --test`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/adapters/spawn.mjs config/limits.json test/seats.test.mjs
