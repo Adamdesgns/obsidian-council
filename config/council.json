@@ -1,5 +1,11 @@
 {
   "host": "127.0.0.1",
   "port": 4777,
-  "lease_ms": 60000
+  "lease_ms": 60000,
+  "seats": [
+    { "id": "codex",  "adapter": "codex",  "account": "codex",     "role": "deliberator" },
+    { "id": "fable",  "adapter": "claude", "account": "anthropic", "role": "deliberator", "model": "claude-fable-5-1" },
+    { "id": "claude", "adapter": "claude", "account": "anthropic", "role": "arbiter" },
+    { "id": "grok",   "adapter": "grok",   "account": "grok",      "role": "executor" }
+  ]
 }
