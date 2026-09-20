@@ -1,6 +1,6 @@
 {
   "daily_ceiling": {
-    "claude": 10,
+    "anthropic": 10,
     "codex": 15,
     "grok": 15
   },

@@ -2,7 +2,7 @@
 // through POST /owner/say (the Floor's entry point), with fake providers only.
 //
 // Defect under test: api.mjs used to call outbox.send directly with the supplied
-// recipients (the Floor sends every @mention) or a codex+grok broadcast default,
+// recipients (the Floor sends every @mention) or the deliberator broadcast default,
 // bypassing the dispatcher's chain contract (root goes only to the first member,
 // chain + hop persisted on the root row). That produced parallel initial delivery
 // plus later relay — duplicate / confused replies.
@@ -14,7 +14,7 @@
 //     the floor every chain returns to, never a hop (B1).
 //   - floor_returned is written only when the hop cap actually cuts a relay (B2).
 //   - No mentions + explicit recipients -> those recipients.
-//   - No mentions + no recipients -> codex+grok broadcast (claude only when addressed).
+//   - No mentions + no recipients -> deliberators broadcast (codex+fable; grok/claude only when addressed).
 //   - Provider invocations (runs table) are counted separately from message
 //     deliveries; no exactly-once promise for external execution.
 import { describe, it } from "node:test";
@@ -315,7 +315,7 @@ describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
     }
   });
 
-  it("(d) unaddressed broadcast goes to codex+grok only; claude joins only when addressed", async () => {
+  it("(d) unaddressed broadcast goes to the deliberators (codex+fable); grok and claude join only when addressed", async () => {
     const ctx = await boot();
     const { port, owner, api } = ctx;
     try {
@@ -327,8 +327,11 @@ describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
         body: { chamber_id: "bcast", content: "status check please" },
       });
       assert.equal(plain.status, 200);
-      assert.deepEqual([...plain.json.message.recipients].sort(), ["codex", "grok"],
-        "unaddressed broadcast = codex+grok (claude's 10/day budget is not spent unaddressed)");
+      // Deliberation Engine Task 3: the default is derived from seat roles.
+      // codex+fable deliberate; grok (executor) and claude (arbiter) only when
+      // addressed. fable spends the anthropic account under its 10/day ceiling.
+      assert.deepEqual([...plain.json.message.recipients].sort(), ["codex", "fable"],
+        "unaddressed broadcast = the deliberators (codex+fable); executors and the arbiter only when addressed");
 
       // @claude routes to claude (root only, chain of one).
       const toClaude = await req(port, {
@@ -363,8 +366,8 @@ describe("HTTP chain routing through POST /owner/say (fake providers)", () => {
         body: { chamber_id: "unknowns", content: "@bob please help with @mystery-tool" },
       });
       assert.equal(r.status, 200);
-      assert.deepEqual([...r.json.message.recipients].sort(), ["codex", "grok"],
-        "unknown mentions fall back to the default broadcast");
+      assert.deepEqual([...r.json.message.recipients].sort(), ["codex", "fable"],
+        "unknown mentions fall back to the default broadcast (the deliberators)");
       const bob = api.store.prepare(
         "SELECT COUNT(*) AS c FROM deliveries WHERE recipient = 'bob'"
       ).get().c;

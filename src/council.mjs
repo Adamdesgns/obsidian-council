@@ -11,6 +11,16 @@ import { fileURLToPath } from "node:url";
 import { createApi } from "./api.mjs";
 import { createDispatcher } from "./dispatcher.mjs";
 import { councilHome } from "./home.mjs";
+import { seatIds } from "./seats.mjs";
+
+/**
+ * Every seat gets a dispatcher loop. routing.mjs may address any seat (and
+ * broadcasts to the deliberators by default), and a delivery to a seat the
+ * dispatcher does not loop can never be claimed, so the two lists must match.
+ */
+export function defaultMembers() {
+  return seatIds();
+}
 
 export async function startCouncil(opts = {}) {
   const home = opts.home || councilHome();
@@ -27,7 +37,7 @@ export async function startCouncil(opts = {}) {
     home,
     store: api.store,
     outbox: api.outbox,
-    members: opts.members || ["codex", "grok", "claude"],
+    members: opts.members || defaultMembers(),
     tokens: api.tokens.members,
     apiBase: base,
     useFake: opts.useFake ?? process.env.COUNCIL_FAKE === "1",

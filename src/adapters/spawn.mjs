@@ -7,9 +7,33 @@ import { randomUUID } from "node:crypto";
 import * as claude from "./claude.mjs";
 import * as codex from "./codex.mjs";
 import * as grok from "./grok.mjs";
+import { seatOf, seatIds, accountOf } from "../seats.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+// Keyed by ADAPTER id. Member ids go through seatOf() first: fable -> claude.
 const ADAPTERS = { claude, codex, grok };
+
+/** Resolve the adapter module for a SEAT id (not an adapter id). */
+export function adapterForSeat(id) {
+  const seat = seatOf(id);
+  const adapter = ADAPTERS[seat.adapter];
+  if (!adapter) throw new Error("unknown member adapter: " + seat.adapter);
+  return adapter;
+}
+
+/** Build argv for a seat, threading its model when it has one. */
+export function argsForSeat(id, packet, opts = {}) {
+  const seat = seatOf(id);
+  const adapter = adapterForSeat(id);
+  const args = adapter.argsFor(packet, opts);
+  if (!seat.model) return args;
+  return ["--model", seat.model, ...args];
+}
+
+/** Adapter id for a seat, or null when the id is not a seat at all. */
+function adapterIdOf(member) {
+  try { return seatOf(member).adapter; } catch { return null; }
+}
 
 const KEEP = [
   "PATH", "Path", "SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP",
@@ -68,14 +92,15 @@ function resolveCli(member, opts = {}) {
   const HOME = process.env.USERPROFILE || process.env.HOME || "";
   const APPDATA = process.env.APPDATA || join(HOME, "AppData", "Roaming");
   const LOCALAPPDATA = process.env.LOCALAPPDATA || join(HOME, "AppData", "Local");
-  if (member === "claude") {
+  const adapter = adapterIdOf(member);
+  if (adapter === "claude") {
     const exe = join(APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
     const cli = join(APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
     if (existsSync(exe)) return { exe, prefix: [], found: true };
     if (existsSync(cli)) return { exe: process.execPath, prefix: [cli], found: true };
     return { found: false };
   }
-  if (member === "codex") {
+  if (adapter === "codex") {
     const bin = join(LOCALAPPDATA, "OpenAI", "Codex", "bin");
     if (existsSync(bin)) {
       const cands = readdirSync(bin)
@@ -87,7 +112,7 @@ function resolveCli(member, opts = {}) {
     }
     return { found: false };
   }
-  if (member === "grok") {
+  if (adapter === "grok") {
     const exe = join(HOME, ".grok", "bin", "grok.exe");
     return existsSync(exe) ? { exe, prefix: [], found: true } : { found: false };
   }
@@ -101,6 +126,55 @@ function runsToday(store, member) {
   ).get(member, day + "T00:00:00.000Z").c;
 }
 
+/** Account id for a seat, or null when the id is not a seat at all. */
+function accountIdOf(member) {
+  try { return accountOf(member); } catch { return null; }
+}
+
+/**
+ * Runs started today across every seat sharing `account`.
+ * READ-ONLY on purpose: no store.commit, because every commit advances the hash chain
+ * and a preflight must not write history.
+ */
+export function runsTodayForAccount(store, account) {
+  const members = seatIds().filter((id) => accountOf(id) === account);
+  if (!members.length) return 0;
+  const since = new Date().toISOString().slice(0, 10) + "T00:00:00.000Z";
+  const marks = members.map(() => "?").join(",");
+  const row = store.prepare(
+    `SELECT COUNT(*) AS c FROM runs WHERE member IN (${marks}) AND started >= ?`
+  ).get(...members, since);
+  return Number(row?.c || 0);
+}
+
+/**
+ * Timeout for a member: seat key, then its adapter's key (fable -> claude, so
+ * a real fable run is not cut at the 5 s fake timeout), then fake, then 240 s.
+ */
+export function timeoutFor(limits, member, adapterId = adapterIdOf(member)) {
+  const t = (limits && limits.timeout_ms) || {};
+  return t[member] ?? (adapterId != null ? t[adapterId] : undefined) ?? t.fake ?? 240_000;
+}
+
+/**
+ * Daily ceiling for a member. The real quota is per ACCOUNT, so:
+ *   1. daily_ceiling[account]                       (shipped config/limits.json)
+ *   2. the smallest daily_ceiling[seat] among seats on that account
+ *      (member-keyed limits, e.g. tests passing { claude: 10 }: fable must
+ *      inherit it rather than fall through to 100 on the same quota)
+ *   3. daily_ceiling[member], then daily_ceiling.fake, then 100  (non-seat ids)
+ */
+export function ceilingFor(limits, member) {
+  const dc = (limits && limits.daily_ceiling) || {};
+  const account = accountIdOf(member);
+  if (account != null && dc[account] != null) return dc[account];
+  if (account != null) {
+    const peers = seatIds().filter((id) => accountOf(id) === account && dc[id] != null).map((id) => dc[id]);
+    if (peers.length) return Math.min(...peers);
+  }
+  return dc[member] ?? dc.fake ?? 100;
+}
+
 /**
  * spawnMember — write runs row before spawn, finalise after; budget refuse; redact.
  * opts.role: "review" | "build" (codex only)
@@ -108,19 +182,16 @@ function runsToday(store, member) {
  */
 export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   const limits = opts.limits || loadLimits();
-  const ceiling = limits.daily_ceiling?.[member] ?? limits.daily_ceiling?.fake ?? 100;
-  const timeoutMs = opts.timeoutMs
-    ?? limits.timeout_ms?.[member]
-    ?? limits.timeout_ms?.fake
-    ?? 240_000;
+  const account = accountIdOf(member);
+  const ceiling = ceilingFor(limits, member);
+  const adapterId = adapterIdOf(member);
+  const timeoutMs = opts.timeoutMs ?? timeoutFor(limits, member, adapterId);
   const role = opts.role || "review";
   const cwd = opts.cwd || process.cwd();
-  const adapter = ADAPTERS[member];
 
   let argv = argvOrPacket;
   if (argvOrPacket && !Array.isArray(argvOrPacket)) {
-    if (!adapter) throw new Error("unknown member adapter: " + member);
-    argv = adapter.argsFor(argvOrPacket, {
+    argv = argsForSeat(member, argvOrPacket, {
       resume: opts.resume,
       persist: opts.persist,
       newId: opts.newId,
@@ -129,12 +200,13 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
     });
   }
 
-  // Budget check before spawn
-  const used = runsToday(store, member);
+  // Budget check before spawn: the whole account's runs, not just this seat's.
+  const used = account != null ? runsTodayForAccount(store, account) : runsToday(store, member);
   if (used >= ceiling) {
     const runId = randomUUID();
     const started = new Date().toISOString();
-    const refused = `BUDGET: ${member} has used ${used}/${ceiling} model runs today; refusing.`;
+    const who = account != null && account !== member ? `${member} (account ${account})` : member;
+    const refused = `BUDGET: ${who} has used ${used}/${ceiling} model runs today; refusing.`;
     store.commit("run_refused", member, (api) => {
       api.prepare(
         `INSERT INTO runs(id, member, chamber_id, message_id, argv, started, ended, exit, tokens_in, tokens_out, cost_reported, checkpoint)
@@ -144,7 +216,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
         redact(JSON.stringify(argv)), started, started, null,
         null, null, null, JSON.stringify({ refused })
       );
-      api.setRef("runs", runId, { refused: true, used, ceiling });
+      api.setRef("runs", runId, { refused: true, used, ceiling, account });
     });
     return { refused, runId, exit: null, stdout: "", stderr: "", timedOut: false, ms: 0 };
   }
@@ -171,7 +243,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   });
 
   let envExtra = {};
-  if (member === "codex" && role === "build" && typeof codex.envFor === "function") {
+  if (adapterId === "codex" && role === "build" && typeof codex.envFor === "function") {
     envExtra = codex.envFor("build", cwd);
   }
   if (opts.memberToken) {
@@ -223,7 +295,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
 
   // Codex Build: verify effective sandbox_policy from rollout
   let buildCheck = null;
-  if (member === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
+  if (adapterId === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
     buildCheck = codex.verifyBuildResult(result);
     if (!buildCheck.ok) {
       result.refused = buildCheck.refused;

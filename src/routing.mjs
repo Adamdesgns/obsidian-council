@@ -15,19 +15,37 @@
 //     deliver the root to a seat with no runner (HTTP 200, zero runs) and made
 //     "@codex ... @owner ... @grok" relay into the void before grok ran.
 //   - No chain + explicit recipients -> those recipients, verbatim.
-//   - No chain + no recipients -> DEFAULT_BROADCAST (codex+grok; claude's
-//     smaller daily ceiling is only spent when claude is addressed).
-export const DEFAULT_BROADCAST = ["codex", "grok"];
+//   - No chain + no recipients -> defaultBroadcast(): the seats whose role is
+//     deliberator (codex+fable today). Executors (grok) and the arbiter
+//     (claude) only speak when addressed, so their quotas are not spent on
+//     unaddressed lines. fable shares claude's anthropic ceiling (spawn.mjs).
+//   - The routable set is the seat table (seats.mjs), so a new seat such as
+//     @fable is routable without touching this file.
+import { seatIds, allSeats } from "./seats.mjs";
 
-export const MEMBERS = ["codex", "grok", "claude"];
+/**
+ * Unaddressed owner messages go to the deliberators, never the executors.
+ * council.mjs runs a dispatcher seat for every seat, so nothing returned here
+ * can be a dead letter.
+ */
+export function defaultBroadcast() {
+  return allSeats().filter((s) => s.role === "deliberator").map((s) => s.id);
+}
 
 export function parseAddressChain(text) {
   const found = [];
+  // "owner" is deliberately NOT routable. outbox.claim is recipient-scoped and
+  // the dispatcher only loops real members, so a delivery addressed to "owner"
+  // can never be claimed — it becomes a dead letter with no event recorded.
+  // The final reply already returns to the owner via the dispatcher's
+  // `["owner"]` fallback; the owner never needs to be a hop. seats.mjs has no
+  // owner entry, so the seat table is the whole routable set.
+  const known = new Set(seatIds());
   const re = /@([a-zA-Z][\w-]*)/g;
   let m;
   while ((m = re.exec(String(text || "")))) {
     const id = m[1].toLowerCase();
-    if (MEMBERS.includes(id)) found.push(id);
+    if (known.has(id)) found.push(id);
   }
   return found;
 }
@@ -44,7 +62,7 @@ export function routeOwnerSay(outbox, envelope = {}) {
     ? [chain[0]]
     : supplied.length
       ? supplied
-      : [...DEFAULT_BROADCAST];
+      : defaultBroadcast();
   return outbox.send({
     ...envelope,
     sender: "owner",

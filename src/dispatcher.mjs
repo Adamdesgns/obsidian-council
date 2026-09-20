@@ -5,15 +5,11 @@ import { openStore } from "./store.mjs";
 import { createOutbox } from "./outbox.mjs";
 import { councilHome, ensureHome } from "./home.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
-import { spawnMember, killTree as killTreeSync } from "./adapters/spawn.mjs";
+import { spawnMember, killTree as killTreeSync, adapterForSeat } from "./adapters/spawn.mjs";
 import { buildPacket } from "./adapters/packet.mjs";
 import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/bridge-config.mjs";
-import * as claudeAd from "./adapters/claude.mjs";
-import * as codexAd from "./adapters/codex.mjs";
-import * as grokAd from "./adapters/grok.mjs";
 import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
-
-const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
+import { advanceOnReply, abandon, stall, resumeStalled, findDeliberationFor } from "./deliberation.mjs";
 
 export { parseAddressChain };
 import { fileURLToPath } from "node:url";
@@ -42,6 +38,20 @@ export function createDispatcher(opts = {}) {
 
   function haltPath() {
     return join(home, "HALT");
+  }
+
+  /**
+   * Engine-issued deliberation traffic is exempt from the conversational caps
+   * and from chain resolution. The caps exist to stop members chatting in a
+   * loop; a deliberation is already bounded by MAX_ROUNDS and by the preflight
+   * budget check. An @name inside the owner's question is text, not a route.
+   *
+   * We do NOT stamp these sends as sender:"owner" to dodge the caps — that would
+   * put the owner's name on machine-generated packets in the hash chain.
+   */
+  function isDeliberationMessage(message) {
+    return typeof message?.idempotency_key === "string"
+      && message.idempotency_key.startsWith("delib:");
   }
 
   function isHalted() {
@@ -168,13 +178,28 @@ export function createDispatcher(opts = {}) {
         }
         setPresence(k.split("::")[0], "blocked", "HALT");
       }
+      // HALT never enters runOne, so an in-flight deliberation would sit in
+      // `debate` (or `stalled`) forever without this sweep. HALT is the owner's
+      // stop: abandon, do not stall. Rows already with the owner are left alone.
+      try {
+        const open = store.prepare(
+          "SELECT id FROM deliberations WHERE state IN ('answer_1','answer_2','debate','stalled')"
+        ).all();
+        for (const row of open) abandon(store, row.id, "halt");
+      } catch { /* store may be closed */ }
       return;
     }
+
+    // Stalled deliberations go back on the floor once their members can run
+    // again. After the HALT check on purpose: a HALTed council resumes nothing.
+    try {
+      resumeStalled(store, outbox, { limits });
+    } catch { /* a failed resume must never stop the tick */ }
 
     for (const member of members) {
       // Find chambers with pending work and no active run
       const pending = store.prepare(
-        `SELECT d.*, m.chamber_id, m.kind AS msg_kind, m.content, m.sender, m.id AS message_id
+        `SELECT d.*, m.chamber_id, m.kind AS msg_kind, m.content, m.sender, m.id AS message_id, m.idempotency_key
          FROM deliveries d JOIN messages m ON m.id = d.message_id
          WHERE d.recipient = ? AND (
            d.status = 'pending'
@@ -194,15 +219,20 @@ export function createDispatcher(opts = {}) {
         // produced by hop <= maxHops may still be consumed (its reply returns
         // to the owner), so a chain with exactly maxHops member hops completes.
         // Initiating hops beyond the cap is blocked at send time in runOne.
+        // Engine packets (delib:*) are invisible to the caps: no refusal, no
+        // owner-turn reset, no count.
+        const exempt = isDeliberationMessage(row);
         const hops = hopCount.get(chamber) || 0;
-        if (hops > maxHops && row.sender !== "owner") {
+        if (!exempt && hops > maxHops && row.sender !== "owner") {
           store.commit("floor_returned", "dispatcher", (api) => {
             api.setRef("deliveries", row.id, { reason: "hop_cap", chamber });
           });
           continue;
         }
         const autos = autoReplies.get(chamber) || 0;
-        if (row.sender === "owner") {
+        if (exempt) {
+          /* leave the chamber's conversational counters as they are */
+        } else if (row.sender === "owner") {
           autoReplies.set(chamber, 0);
           hopCount.set(chamber, 0);
         } else if (autos >= maxAuto) {
@@ -373,12 +403,19 @@ export function createDispatcher(opts = {}) {
     // P2-6e item 3: stamp bridge on every run of this spawn path (skip when mixed statuses already set).
     if (!mixedBridgeFallback) stampBridgeAll(bridgeStatus);
 
-    const ad = ADAPTERS[member];
     let text = "";
-    if (ad && ad.finalText) {
-      try { text = ad.finalText(result) || ""; } catch { text = ""; }
-    }
+    try {
+      // Seat -> adapter (fable -> claude). A non-seat member falls through to raw stdout.
+      text = adapterForSeat(member).finalText(result) || "";
+    } catch { text = ""; }
     if (!text) text = String(result && result.stdout || "").trim().slice(0, 4000);
+    // Test seam: a scripted reply lets a test drive verdict lines per member and per
+    // packet. opts.env cannot do this — it is fixed when the dispatcher is constructed.
+    // Returning null keeps the adapter's real text.
+    if (typeof opts.scriptedReply === "function") {
+      const scripted = opts.scriptedReply(member, message, result);
+      if (scripted != null) text = String(scripted);
+    }
     let outbound = [];
     try {
       const objs = JSON.parse(result.stdout);
@@ -395,6 +432,23 @@ export function createDispatcher(opts = {}) {
     if (failReason) {
       stampBridgeAll(bridgeStatus, { fail: failReason });
       try { expireDeliveryLease(delivery.id, failReason, member); } catch { /* store may be closed after hardStop */ }
+      // Deliberation: stall, never abandon. Every failure stalls — nobody has yet
+      // seen what a CLI prints at a real usage limit, so isCeilingOrAuth's regex is
+      // not trusted to branch on. The raw signature is kept for the first time it
+      // happens. The lease above is already expired, so the packet is retried;
+      // if a retry succeeds, advanceOnReply resumes the row from stall_detail.
+      try {
+        const delib = findDeliberationFor(store, message);
+        if (delib) {
+          stall(store, delib.id, {
+            member,
+            reason: failReason,
+            exit: result?.exit ?? null,
+            stderr: String(result?.stderr || "").slice(0, 2000),
+            stdout: String(result?.stdout || "").slice(0, 2000),
+          });
+        }
+      } catch { /* never let cleanup mask the original failure */ }
       try {
         if (isCeilingOrAuth(failReason)) setPresence(member, "blocked", failReason);
         else setPresence(member, "idle");
@@ -428,6 +482,7 @@ export function createDispatcher(opts = {}) {
       });
     }
 
+    const exemptMessage = isDeliberationMessage(message);
     for (const out of outbound) {
       let recipients = out.recipients || (out.recipient ? [out.recipient] : ["owner"]);
       const memberDirected = recipients.some((r) => r && r !== "owner");
@@ -451,7 +506,7 @@ export function createDispatcher(opts = {}) {
           });
         }
       }
-      if (message.sender !== "owner") {
+      if (message.sender !== "owner" && !exemptMessage) {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
       outbox.send({
@@ -471,6 +526,9 @@ export function createDispatcher(opts = {}) {
       const seen = new Set();
       while (cur && !seen.has(cur.id)) {
         seen.add(cur.id);
+        // Engine packets are not chain roots and are never relayed: an @name in
+        // the owner's question is text. Stop the walk here.
+        if (isDeliberationMessage(cur)) return null;
         let chain = cur.chain;
         if (typeof chain === "string" && chain) {
           try { chain = JSON.parse(chain); } catch { chain = null; }
@@ -510,18 +568,18 @@ export function createDispatcher(opts = {}) {
       // only here can one be suppressed: when the member's own outbound already
       // answered (loop above), or defaultRespond is off, nothing is truncated
       // and no floor_returned is recorded.
-      if (chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
+      if (!exemptMessage && chainNext && chainNext !== "owner" && (hopCount.get(chamber) || 0) >= maxHops) {
         store.commit("floor_returned", member, (api) => {
           api.setRef("messages", message.id, { reason: "hop_cap", chamber, truncated_next: chainNext });
         });
         chainNext = null;
         advance = null;
       }
-      if (message.sender !== "owner") {
+      if (message.sender !== "owner" && !exemptMessage) {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
       const recipients = chainNext ? [chainNext] : ["owner"];
-      if (chainNext) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
+      if (chainNext && !exemptMessage) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
       outbox.send({
         sender: member,
         recipients,
@@ -532,6 +590,20 @@ export function createDispatcher(opts = {}) {
         idempotency_key: `disp:${member}:${message.id}:respond:${gen}`,
         advance_chain: advance || undefined,
       });
+    }
+
+    // Deliberation: advance the state machine on this member's reply. After the
+    // ack, so only a counted reply advances. Wrapped because runOne is
+    // fire-and-forget — an escaping throw becomes an unhandled rejection AND
+    // leaves presence stuck at "responding".
+    try {
+      advanceOnReply(store, outbox, { message, member, text });
+    } catch (e) {
+      try {
+        store.commit("deliberation_hook_failed", member, (api) => {
+          api.setRef("deliberations", null, { message_id: message.id, error: String(e?.message || e) });
+        });
+      } catch { /* store may be closed */ }
     }
 
     setPresence(member, "idle");
