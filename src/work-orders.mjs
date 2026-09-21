@@ -7,6 +7,37 @@ const ACTIVE=["planning","specialist","implementing"];
 const TERMINAL=["completed","cancelled"];
 const phaseOf=row=>row.state==="stalled"?row.resume_state:row.state;
 
+/** Premium planners — never auto-enqueued for the implementing phase. */
+const PREMIUM_WORKERS = new Set(["codex", "claude", "gpt-5", "opus", "sonnet"]);
+/** Low-cost coding workers that may own implementing. Cursor is handoff-only. */
+const CODING_WORKERS = new Set(["grok"]);
+
+export function resolveImplementWorker(worker) {
+  const selected = String(worker || "").toLowerCase();
+  if (!selected) return { ok: false, wait: true, reason: "no-worker-selected" };
+  if (selected === "cursor") return { ok: false, wait: true, reason: "cursor-handoff-only", selected };
+  if (PREMIUM_WORKERS.has(selected)) {
+    return { ok: false, wait: true, reason: "coding-must-not-use-premium-worker", selected };
+  }
+  if (!CODING_WORKERS.has(selected)) {
+    return { ok: false, wait: true, reason: "no-transport", selected };
+  }
+  return { ok: true, worker: selected };
+}
+
+function enterWaitingWorker(api, row, reason, selected) {
+  update(api, row, {
+    state: "waiting_worker",
+    stall_detail: JSON.stringify({
+      honest: true,
+      reason,
+      selected: selected || null,
+      message: `Waiting: ${reason} (will not fall back to Codex/Claude)`,
+    }),
+  });
+}
+
+
 function validWorkspace(value){
   if(typeof value!=="string"||!value.trim()||!isAbsolute(value))return null;
   const path=resolve(value.trim());
@@ -102,7 +133,14 @@ export function completeWorkReply(store,{message,delivery,gen,member,text}){
     api.prepare("UPDATE work_order_messages SET response=? WHERE message_id=?").run(text,message.id);
     if(task.phase==="planning")update(api,row,{plan:text,plan_hash:contentHash(text),state:"awaiting_approval"});
     else if(task.phase==="specialist"){
-      update(api,row,{specialist_output:text,state:"implementing"});enqueue(api,row,"implementing","codex");
+      update(api,row,{specialist_output:text});
+      const routed=resolveImplementWorker(row.worker);
+      if(!routed.ok){
+        enterWaitingWorker(api,row,routed.reason,routed.selected);
+      }else{
+        update(api,row,{state:"implementing"});
+        enqueue(api,row,"implementing",routed.worker);
+      }
     }else update(api,row,{result:text,state:"completed"});
     api.setRef("work_orders",row.id,{state:row.state,phase:task.phase,member});
     return {ok:true,state:row.state,id:row.id};
@@ -118,9 +156,19 @@ export function approveWorkPlan(store,id,{plan_hash}){
     if(row.worker==="cursor"){
       update(api,row,{state:"handoff_ready"});
     }else if(row.worker==="codex"){
-      update(api,row,{state:"implementing"});enqueue(api,row,"implementing","codex");
-    }else{
+      // Codex is planner-only under cost-first: never enqueue implementing to Codex.
+      enterWaitingWorker(api,row,"coding-must-not-use-premium-worker","codex");
+    }else if(PREMIUM_WORKERS.has(String(row.worker).toLowerCase())){
+      // Premium specialist (e.g. claude) still runs the specialist phase; coding
+      // ownership is decided after specialist replies (no Codex fallback).
       update(api,row,{state:"specialist"});enqueue(api,row,"specialist",row.worker);
+    }else{
+      const routed=resolveImplementWorker(row.worker);
+      if(!routed.ok){
+        enterWaitingWorker(api,row,routed.reason,routed.selected);
+      }else{
+        update(api,row,{state:"implementing"});enqueue(api,row,"implementing",routed.worker);
+      }
     }
     api.setRef("work_orders",id,{state:row.state,worker:row.worker,plan_hash});
     return {ok:true,state:row.state};
@@ -161,7 +209,7 @@ export function cancelWork(store,id,reason="cancelled"){
 }
 
 export function haltWorkOrders(store){
-  for(const row of store.prepare("SELECT id FROM work_orders WHERE state IN ('planning','specialist','implementing','stalled','awaiting_approval')").all())cancelWork(store,row.id,"halted");
+  for(const row of store.prepare("SELECT id FROM work_orders WHERE state IN ('planning','specialist','implementing','stalled','awaiting_approval','waiting_worker')").all())cancelWork(store,row.id,"halted");
 }
 
 export function readWorkOrder(store,id){

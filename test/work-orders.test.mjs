@@ -21,7 +21,7 @@ function claim(c,id,member){
 }
 function reply(c,id,member,text){const lease=claim(c,id,member);assert.ok(lease);return completeWorkReply(c.store,{...lease,member,text});}
 
-test("Codex plan is exact-approved, handed to specialist, then executed by sandbox lane",t=>{
+test("Codex plan is exact-approved and handed to specialist; coding does not fall back to Codex",t=>{
   const c=fixture(t),start=startWorkOrder(c.store,{objective:"Build the feature",workspace:c.workspace,worker:"claude",idempotency_key:"one"});
   assert.equal(start.ok,true);
   assert.equal(startWorkOrder(c.store,{objective:"Build the feature",workspace:c.workspace,worker:"claude",idempotency_key:"one"}).duplicate,true);
@@ -33,11 +33,35 @@ test("Codex plan is exact-approved, handed to specialist, then executed by sandb
   assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:"wrong"}).reason,"stale_plan");
   assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"specialist");
   reply(c,start.id,"claude","Claude implementation guidance");
-  row=readWorkOrder(c.store,start.id);assert.equal(row.state,"implementing");assert.equal(row.specialist_output,"Claude implementation guidance");
-  const build=claim(c,start.id,"codex");assert.equal(workTaskFor(c.store,build.message.id).phase,"implementing");
-  completeWorkReply(c.store,{...build,member:"codex",text:"Changed files and tests passed"});
-  row=readWorkOrder(c.store,start.id);assert.equal(row.state,"completed");assert.equal(row.result,"Changed files and tests passed");
+  row=readWorkOrder(c.store,start.id);
+  assert.equal(row.state,"waiting_worker");
+  assert.equal(row.specialist_output,"Claude implementation guidance");
+  assert.match(row.stall_detail,/will not fall back to Codex\/Claude/);
   assert.equal(c.store.verifyChain().ok,true);
+});
+
+test("selected low-cost worker owns implementing; Codex is never the builder",t=>{
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Build via grok",workspace:c.workspace,worker:"grok",idempotency_key:"grok-build"});
+  assert.equal(start.ok,true);
+  reply(c,start.id,"codex","Plan for grok");
+  let row=readWorkOrder(c.store,start.id);
+  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"implementing");
+  const build=claim(c,start.id,"grok");
+  assert.ok(build);
+  assert.equal(workTaskFor(c.store,build.message.id).phase,"implementing");
+  assert.equal(workTaskFor(c.store,build.message.id).member,"grok");
+  completeWorkReply(c.store,{...build,member:"grok",text:"Grok built it"});
+  row=readWorkOrder(c.store,start.id);
+  assert.equal(row.state,"completed");
+  assert.equal(row.result,"Grok built it");
+});
+
+test("worker=codex after plan approval waits honestly instead of implementing",t=>{
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Plan only",workspace:c.workspace,worker:"codex",idempotency_key:"codex-wait"});
+  reply(c,start.id,"codex","A plan");
+  const row=readWorkOrder(c.store,start.id);
+  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"waiting_worker");
+  assert.match(readWorkOrder(c.store,start.id).stall_detail,/coding-must-not-use-premium-worker/);
 });
 
 test("failures pause without retry storms; Cursor route produces an honest external packet",t=>{
@@ -62,7 +86,8 @@ test("HTTP delegation runs fake Codex plan, Claude handoff, and Codex build end 
   const until=async fn=>{const end=Date.now()+5000;while(Date.now()<end){const r=fn();if(r)return r;await new Promise(r=>setTimeout(r,20));}throw Error("timeout");};
   let row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="awaiting_approval"&&r;});
   assert.equal((await req(`/owner/work-order/${row.id}/approve`,{plan_hash:row.plan_hash})).status,200);
-  row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="completed"&&r;});
-  assert.equal(row.specialist_output,"Specialist notes");assert.equal(row.result,"Build complete");
-  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["codex","claude","codex"]);
+  row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="waiting_worker"&&r;});
+  assert.equal(row.specialist_output,"Specialist notes");
+  assert.match(row.stall_detail,/will not fall back to Codex\/Claude/);
+  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["codex","claude"]);
 });
