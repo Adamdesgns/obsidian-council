@@ -90,6 +90,33 @@ export function normalizeAccount(raw, now = Date.now()) {
   };
 }
 
+
+/** Age a normalized account from its own checkedAt. maxAgeMs currently only
+ *  drove refresh scheduling; an adapter could return an old checkedAt still
+ *  marked fresh. Source-timestamp freshness closes that gap. */
+export function ageAccount(account, now = Date.now(), maxAgeMs = 5 * 60_000) {
+  if (!account || account.status === "unavailable") return account;
+  const checkedMs = account.checkedAt ? Date.parse(account.checkedAt) : NaN;
+  if (!Number.isFinite(checkedMs)) {
+    if (account.status === "fresh" || account.status === "simulated" || account.status === "manual") {
+      return {
+        ...account,
+        status: "stale",
+        reason: account.reason || "Reading has no usable timestamp.",
+      };
+    }
+    return account;
+  }
+  if (now - checkedMs > maxAgeMs && (account.status === "fresh" || account.status === "simulated" || account.status === "manual")) {
+    return {
+      ...account,
+      status: "stale",
+      reason: account.reason || "Reading older than freshness window; showing last good data.",
+    };
+  }
+  return account;
+}
+
 function unavailableAccount(service, reason) {
   return { accountId: service, service, status: "unavailable", sourceLabel: "Not connected", reason, checkedAt: null, pools: [] };
 }
@@ -158,7 +185,8 @@ export function createUsageService(opts = {}) {
     if (inFlight) await inFlight;
     else if (lastRefreshAt == null || (refresh ? age >= minRefreshMs : age >= Math.max(maxAgeMs, minRefreshMs))) await refreshAll();
     else if (refresh) throttled = true;
-    const accounts = services.map(s => cache.get(s)).filter(Boolean);
+    const now2 = clock();
+    const accounts = services.map(s => cache.get(s)).filter(Boolean).map(a => ageAccount(a, now2, maxAgeMs));
     return {
       mode: fixtureMode ? "simulated" : accounts.some(a => a.status !== "unavailable") ? "connected" : "unconnected",
       throttled,

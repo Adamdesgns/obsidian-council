@@ -1,0 +1,3 @@
+{"type":"token_count","timestamp":"2026-09-21T00:00:00.000Z","rate_limit":{"used_percent":31,"window_minutes":300,"remaining_percent":69}}
+{"type":"token_count","timestamp":"2026-09-21T00:05:00.000Z","rate_limit":{"used_percent":44,"window_minutes":300,"remaining_percent":56}}
+{"type":"chat","timestamp":"2026-09-21T00:06:00.000Z","text":"should never be read"}

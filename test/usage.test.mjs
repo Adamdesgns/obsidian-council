@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeAccount, createUsageService } from "../src/usage/service.mjs";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { normalizeAccount, createUsageService, ageAccount } from "../src/usage/service.mjs";
+import {
+  isEnabled, extractTokenCountRates, parseJsonlTokenCounts, readCodexLocalUsage,
+} from "../src/usage/codex-local-reader.mjs";
 
 const NOW = Date.parse("2026-09-20T03:00:00.000Z");
 
@@ -133,4 +139,62 @@ test("a failing source backs off instead of being retried on every refresh", asy
   assert.equal(attempts, 1, "second refresh is past the throttle but inside the source's backoff");
   now += 1000; await service.read({ refresh: true });
   assert.equal(attempts, 2);
+});
+
+const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+test("ageAccount keeps a fresh reading inside the window", () => {
+  const account = {
+    service: "codex", status: "fresh", checkedAt: new Date(NOW - 60_000).toISOString(),
+    sourceLabel: "Injected", pools: [],
+  };
+  assert.equal(ageAccount(account, NOW, 5 * 60_000).status, "fresh");
+});
+
+test("ageAccount marks an aged checkedAt as stale", () => {
+  const account = {
+    service: "codex", status: "fresh", checkedAt: new Date(NOW - 10 * 60_000).toISOString(),
+    sourceLabel: "Injected", pools: [],
+  };
+  const aged = ageAccount(account, NOW, 5 * 60_000);
+  assert.equal(aged.status, "stale");
+  assert.equal(aged.checkedAt, account.checkedAt);
+});
+
+test("createUsageService ages cached checkedAt into stale on read", async () => {
+  const adapters = {
+    codex: { async fetch() {
+      return {
+        accountId: "codex", service: "codex", status: "fresh", sourceLabel: "Injected",
+        checkedAt: new Date(NOW - 10 * 60_000).toISOString(), pools: [],
+      };
+    }},
+    claude: unavailable("claude"), cursor: unavailable("cursor"), grok: unavailable("grok"),
+  };
+  const service = createUsageService({ adapters, minRefreshMs: 0, maxAgeMs: 5 * 60_000, clock: () => NOW });
+  const r = await service.read({ refresh: true });
+  assert.equal(r.accounts.find(a => a.service === "codex").status, "stale");
+});
+
+test("codex local reader is default off", () => {
+  assert.equal(isEnabled({}), false);
+  assert.equal(isEnabled({ CODEX_LOCAL_USAGE_READER: "0" }), false);
+  assert.equal(isEnabled({ CODEX_LOCAL_USAGE_READER: "1" }), true);
+  const off = readCodexLocalUsage({ dir: FIXTURE_DIR, env: {} });
+  assert.equal(off.enabled, false);
+  assert.deepEqual(off.snapshots, []);
+});
+
+test("codex local reader extracts only token_count rates from synthetic JSONL", () => {
+  const text = readFileSync(join(FIXTURE_DIR, "codex-token-count.jsonl"), "utf8");
+  assert.equal(extractTokenCountRates({ type: "chat", text: "nope" }), null);
+  const snap = parseJsonlTokenCounts(text);
+  assert.equal(snap.checkedAt, "2026-09-21T00:05:00.000Z");
+  assert.equal(snap.rates.used_percent, 44);
+  assert.equal(snap.simulated, true);
+  const on = readCodexLocalUsage({ dir: FIXTURE_DIR, env: { CODEX_LOCAL_USAGE_READER: "1" } });
+  assert.equal(on.enabled, true);
+  assert.equal(on.snapshots[0].rates.remaining_percent, 56);
+  assert.equal(JSON.stringify(on).includes("should never be read"), false);
+  assert.equal(JSON.stringify(on).includes(FIXTURE_DIR), false, "paths must not leak");
 });
