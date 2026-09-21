@@ -13,6 +13,28 @@
   main { display:grid; grid-template-columns:220px 1fr 280px; min-height:calc(100vh - 52px); }
   aside, section { padding:12px; border-right:1px solid var(--line); background:var(--panel); }
   #floor { display:flex; flex-direction:column; background:var(--bg); }
+  #usagePanel { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px; background:var(--panel); }
+  #usageHead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  #usageHead h2 { margin:0; }
+  #usageMeta { color:var(--muted); font-size:12px; margin:0 0 0 auto; }
+  #usageRefresh { padding:4px 10px; font-size:12px; }
+  #usageCards { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:8px; }
+  .ucard { border:1px solid var(--line); border-radius:6px; padding:8px; background:#0f1014; min-width:0; }
+  .ucard h3 { margin:0 0 6px; font-size:13px; display:flex; justify-content:space-between; gap:6px; align-items:baseline; }
+  .ucard .tag { font-size:11px; font-weight:400; color:var(--muted); }
+  .ucard .tag.stale, .uwin.low .uval { color:#e6b450; }
+  .uwin { margin-bottom:8px; }
+  .uwin .urow { display:flex; justify-content:space-between; gap:6px; font-size:12px; }
+  .uwin .uval { font-variant-numeric:tabular-nums; }
+  .uwin.zero .uval { color:var(--danger); }
+  .uwin.unknown .uval, .ureset, .ucard details, .unone { color:var(--muted); font-size:12px; }
+  .ubar { height:6px; border-radius:3px; background:#23242b; margin:3px 0; overflow:hidden; }
+  .ubar > i { display:block; height:100%; background:var(--accent); }
+  .uwin.low .ubar > i { background:#e6b450; }
+  .uwin.unknown .ubar { background:repeating-linear-gradient(45deg,#23242b 0 4px,#16171c 4px 8px); }
+  .ucard summary { cursor:pointer; }
+  .ucard details p { margin:4px 0 0; overflow-wrap:anywhere; }
+  .pill.sim { background:#3a321e; color:#e6b450; }
   #delegatePanel { border:1px solid #3b4f7a; border-radius:8px; padding:12px; margin-bottom:12px; background:#111722; }
   #delegatePanel input, #delegatePanel select { min-width:0; }
   #workText { white-space:pre-wrap; overflow-wrap:anywhere; max-height:34vh; overflow:auto; background:#0a0b0e; padding:8px; border-radius:6px; }
@@ -57,6 +79,15 @@
     <ul id="chamberList"></ul>
   </aside>
   <section id="floor">
+    <div id="usagePanel" role="region" aria-labelledby="usageTitle">
+      <div id="usageHead">
+        <h2 id="usageTitle">Usage left</h2>
+        <span class="pill sim" id="usageMode" hidden>SIMULATED — not real readings</span>
+        <p id="usageMeta" role="status">Not loaded.</p>
+        <button id="usageRefresh" type="button">Refresh</button>
+      </div>
+      <div id="usageCards"></div>
+    </div>
     <div id="delegatePanel">
       <h2>Delegate work</h2>
       <p>Codex plans first. After you approve the exact plan, the selected specialist receives it and the sandboxed Codex build lane applies the work.</p>
@@ -362,6 +393,58 @@ document.getElementById("approveDecision").onclick=()=>decideAction("approve");
 document.getElementById("overruleDecision").onclick=()=>decideAction("overrule");
 document.getElementById("resumeDecision").onclick=()=>decideAction("resume");
 document.getElementById("cancelDecision").onclick=()=>decideAction("cancel");
+
+// Usage left: remaining subscription allowance per account. Read-only, on its
+// own slow timer (never the 3s loop); the server throttles real refreshes.
+let usageData=null;
+const usageEl=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;};
+function usageSpan(ms){const m=Math.max(0,Math.round(ms/60000));if(m<60)return m+"m";const h=Math.floor(m/60);if(h<48)return h+"h "+(m%60)+"m";return Math.floor(h/24)+"d "+(h%24)+"h";}
+function usageAgo(iso){return iso?usageSpan(Date.now()-Date.parse(iso))+" ago":"never";}
+function renderUsage(){
+  const cards=document.getElementById("usageCards"),d=usageData;
+  // Re-rendering must not snap shut a Details block the owner has open.
+  const open=new Set([...cards.querySelectorAll("details[open]")].map(e=>e.dataset.service));cards.textContent="";
+  document.getElementById("usageMode").hidden=!d||d.mode!=="simulated";
+  if(!d)return;
+  const statusText={fresh:"Live reading",simulated:"Simulated",stale:"Stale",manual:"Manual entry",unavailable:"Unavailable"};
+  for(const a of d.accounts){
+    const card=usageEl("div","ucard"),h3=usageEl("h3",null,a.service.charAt(0).toUpperCase()+a.service.slice(1));
+    h3.appendChild(usageEl("span","tag "+a.status,statusText[a.status]||a.status));card.appendChild(h3);
+    const windows=a.pools.flatMap(p=>p.windows.map(w=>({p,w})));
+    if(a.status==="unavailable"||!windows.length)card.appendChild(usageEl("p","unone",a.status==="unavailable"?"Usage unavailable":"No windows reported"));
+    for(const {w} of windows){
+      const known=w.remainingPercent!=null,val=known?w.remainingPercent+"% left"+(w.display==="low"?" · low":""):"Unavailable";
+      const box=usageEl("div","uwin "+w.display),row=usageEl("div","urow");
+      row.appendChild(usageEl("span",null,w.label));row.appendChild(usageEl("span","uval",val));box.appendChild(row);
+      const bar=usageEl("div","ubar"),fill=usageEl("i");bar.setAttribute("role","progressbar");bar.setAttribute("aria-label",a.service+" "+w.label+" allowance remaining");
+      bar.setAttribute("aria-valuemin","0");bar.setAttribute("aria-valuemax","100");bar.setAttribute("aria-valuetext",val);
+      if(known){bar.setAttribute("aria-valuenow",String(w.remainingPercent));fill.style.width=w.remainingPercent+"%";bar.appendChild(fill);}
+      box.appendChild(bar);
+      const left=w.resetsAt?Date.parse(w.resetsAt)-Date.now():null;
+      box.appendChild(usageEl("div","ureset",left==null?"Reset time unknown":left<=0?"Reset time passed — refresh due":"Resets in "+usageSpan(left)));
+      card.appendChild(box);
+    }
+    const det=usageEl("details");det.dataset.service=a.service;det.open=open.has(a.service);det.appendChild(usageEl("summary",null,"Details"));
+    det.appendChild(usageEl("p",null,"Source: "+a.sourceLabel));
+    det.appendChild(usageEl("p",null,"Reading taken: "+(a.checkedAt?usageAgo(a.checkedAt)+" ("+a.checkedAt.slice(0,16).replace("T"," ")+"Z)":"never")));
+    for(const p of a.pools)det.appendChild(usageEl("p",null,"Pool: "+(p.label||p.id)+(p.modelIds.length?" — covers "+p.modelIds.join(", "):"")));
+    if(a.reason)det.appendChild(usageEl("p",null,a.reason));
+    card.appendChild(det);cards.appendChild(card);
+  }
+  const live=d.accounts.filter(a=>a.status!=="unavailable").length;
+  document.getElementById("usageMeta").textContent=(d.mode==="simulated"?"Simulated fixtures":live+" of "+d.accounts.length+" services connected")+" · checked "+usageAgo(d.lastRefreshAt)+(d.throttled?" · refresh limited, try again shortly":"");
+}
+let usageBusy=false;
+async function loadUsage(force){
+  if(!token()||usageBusy)return;usageBusy=true;document.getElementById("usageRefresh").disabled=true;
+  try{usageData=await api("/owner/usage"+(force?"?refresh=1":""));renderUsage();}
+  catch(e){document.getElementById("usageMeta").textContent="Usage could not be loaded: "+e.message;}
+  finally{usageBusy=false;document.getElementById("usageRefresh").disabled=false;}
+}
+document.getElementById("usageRefresh").onclick=()=>loadUsage(true);
+setInterval(()=>loadUsage(false),60000);
+setInterval(renderUsage,30000);
+loadUsage(false);
 
 refreshDecisions();
 refreshWork();

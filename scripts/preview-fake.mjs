@@ -5,7 +5,7 @@ import {join} from "node:path";
 import {startCouncil} from "../src/council.mjs";
 const home=mkdtempSync(join(tmpdir(),"council-floor-preview-"));
 const failed=new Set();
-const c=await startCouncil({home,port:0,useFake:true,tickMs:100,disableBridge:true,
+const c=await startCouncil({home,port:0,useFake:true,usageFixture:true,tickMs:100,disableBridge:true,
   limits:{daily_ceiling:{codex:1000,claude:1000,grok:1000},timeout_ms:{fake:5000}},
   scriptedReply:(member,msg)=>{
     if(msg.content.includes("planning stage of a Council work order")) return "1. Inspect the requested feature and current tests.\n2. Update the named implementation modules.\n3. Add focused regression coverage.\n4. Run the local test suite and report changed files, results, and remaining gates.";

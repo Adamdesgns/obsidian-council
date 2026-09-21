@@ -13,6 +13,7 @@ import { seatIds } from "./seats.mjs";
 import { contentHash } from "./sanctions.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
 import { startDeliberation, readDeliberation, resumeStalled, decide, abandon, haltDeliberations, taskFor } from "./deliberation.mjs";
+import { createUsageService } from "./usage/service.mjs";
 import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders} from "./work-orders.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
@@ -89,6 +90,8 @@ export function createApi(opts = {}) {
   const store = opts.store || openStore({ home });
   const outbox = opts.outbox || createOutbox(store, { leaseMs: config.lease_ms });
   const tokens = opts.tokens || loadOrCreateTokens(home);
+  // Fixture readings are opt-in (tests, preview-fake). Default: honest "unavailable".
+  const usageService = opts.usageService || createUsageService({ fixtureMode: opts.usageFixture === true });
   const sseClients = new Set();
   let halt = existsSync(join(home, "HALT"));
 
@@ -324,6 +327,10 @@ export function createApi(opts = {}) {
   }
 
   async function ownerRoutes(req, res, path, identity, url) {
+    if (req.method === "GET" && path === "/owner/usage") {
+      // Read-only. ?refresh=1 asks for a re-read; the service's throttle decides.
+      return sendJson(res, 200, await usageService.read({ refresh: url.searchParams.get("refresh") === "1" }));
+    }
     if(req.method==="GET"&&path==="/owner/work-orders"){
       const rows=store.prepare("SELECT id FROM work_orders ORDER BY created DESC LIMIT 100").all();
       return sendJson(res,200,{work_orders:rows.map(r=>readWorkOrder(store,r.id))});

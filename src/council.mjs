@@ -22,7 +22,7 @@ export async function startCouncil(opts = {}) {
   else if (process.env.COUNCIL_PORT) config.port = Number(process.env.COUNCIL_PORT);
 
   const limits=opts.limits || loadLimits();
-  const api = createApi({ home, config, limits });
+  const api = createApi({ home, config, limits, usageService: opts.usageService, usageFixture: opts.usageFixture });
   const bound = await api.listen();
   const port = api.server.address().port;
   const base = `http://${bound.host}:${port}`;
