@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="theme-color" content="#0e0f12"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<link rel="manifest" href="/manifest.webmanifest"/>
+<link rel="icon" href="/council-icon.svg"/>
 <title>Obsidian Council — Floor</title>
 <style>
   :root { color-scheme: dark; --bg:#0e0f12; --panel:#16171c; --line:#2a2b31; --text:#e8e8ea; --muted:#9aa; --accent:#7aa2ff; --danger:#ff6b6b; }
@@ -55,7 +59,25 @@
   button:disabled { opacity:.45; cursor:default; }
   section, aside { min-width:0; }
   #say { min-width:0; }
-  @media(max-width:850px) { main { grid-template-columns:1fr; } header { flex-wrap:wrap; } header input { min-width:0!important; width:100%; } }
+  @media(max-width:850px) {
+    body { font-size:16px; }
+    header { position:sticky; top:0; z-index:10; flex-wrap:wrap; background:var(--bg); padding:10px 12px; }
+    header input { min-width:0!important; width:100%; margin-left:0!important; }
+    main { display:flex; flex-direction:column; min-height:auto; }
+    #floor { order:1; padding:10px; }
+    #chambers { order:2; }
+    main > aside:last-child { order:3; }
+    aside, section { border-right:0; border-bottom:1px solid var(--line); }
+    input, button, select { min-height:44px; font-size:16px; }
+    textarea { min-height:110px; font-size:16px; }
+    #delegatePanel .row > * { flex:1 1 100%; width:100%; }
+    #composer { flex-wrap:wrap; }
+    #composer #say { flex:1 1 100%!important; min-height:48px; }
+    #composer button { flex:1; }
+    #usagePanel { margin-bottom:10px; }
+    #usageMeta { width:100%; margin:0; }
+    #log { min-height:220px; max-height:45vh; }
+  }
 </style>
 </head>
 <body>

@@ -17,6 +17,7 @@ import { createUsageService } from "./usage/service.mjs";
 import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders,acceptWork,reviseWork} from "./work-orders.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
+const LOOPBACK_NAMES = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function loadConfig() {
   const p = join(ROOT, "config", "council.json");
@@ -28,18 +29,31 @@ function loadConfig() {
   }
 }
 
-function isLoopbackHost(hostHeader) {
-  if (!hostHeader) return false;
-  const host = String(hostHeader).split(",")[0].trim().toLowerCase();
-  const name = host.replace(/^\[|\]$/g, "").split(":")[0];
-  return name === "127.0.0.1" || name === "localhost" || name === "::1";
+function headerHostname(hostHeader) {
+  if (!hostHeader) return "";
+  try { return new URL(`http://${String(hostHeader).split(",")[0].trim()}`).hostname.toLowerCase(); }
+  catch { return ""; }
 }
 
-function isLoopbackOrigin(origin) {
+function allowedNames(config) {
+  const names = new Set(LOOPBACK_NAMES);
+  for (const raw of config.allowed_hosts || []) {
+    const name = String(raw).trim().replace(/\.$/, "").toLowerCase();
+    if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.ts\.net$/.test(name)) throw new Error("invalid_allowed_host");
+    names.add(name);
+  }
+  return names;
+}
+
+function isAllowedHost(hostHeader, names) {
+  return names.has(headerHostname(hostHeader));
+}
+
+function isAllowedOrigin(origin, names) {
   if (!origin) return true; // non-browser clients omit Origin
   try {
     const u = new URL(origin);
-    return u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "::1";
+    return (u.protocol === "http:" || u.protocol === "https:") && names.has(u.hostname.toLowerCase());
   } catch {
     return false;
   }
@@ -85,7 +99,8 @@ function sendJson(res, status, obj) {
 export function createApi(opts = {}) {
   const home = ensureHome(opts.home || councilHome());
   const config = { ...loadConfig(), ...opts.config };
-  if (!["127.0.0.1","localhost","::1"].includes(config.host)) throw new Error("loopback_only");
+  if (!LOOPBACK_NAMES.has(config.host)) throw new Error("loopback_only");
+  const acceptedHosts = allowedNames(config);
   const limits = opts.limits || loadLimits();
   const store = opts.store || openStore({ home });
   const outbox = opts.outbox || createOutbox(store, { leaseMs: config.lease_ms });
@@ -137,7 +152,7 @@ export function createApi(opts = {}) {
   async function handle(req, res) {
     const host = req.headers.host;
     const origin = req.headers.origin;
-    if (!isLoopbackHost(host) || !isLoopbackOrigin(origin)) {
+    if (!isAllowedHost(host, acceptedHosts) || !isAllowedOrigin(origin, acceptedHosts)) {
       return sendJson(res, 403, { error: "loopback_only" });
     }
 
@@ -153,6 +168,18 @@ export function createApi(opts = {}) {
         return res.end(html);
       }
       return sendJson(res, 200, { ok: true, service: "obsidian-council" });
+    }
+    if (req.method === "GET" && path === "/manifest.webmanifest") {
+      const manifestPath = join(ROOT, "web", "manifest.webmanifest");
+      const manifest = readFileSync(manifestPath);
+      res.writeHead(200, { "Content-Type": "application/manifest+json", "Content-Length": manifest.length });
+      return res.end(manifest);
+    }
+    if (req.method === "GET" && path === "/council-icon.svg") {
+      const iconPath = join(ROOT, "web", "council-icon.svg");
+      const icon = readFileSync(iconPath);
+      res.writeHead(200, { "Content-Type": "image/svg+xml", "Content-Length": icon.length, "Cache-Control": "public, max-age=86400" });
+      return res.end(icon);
     }
 
     const bearer = parseBearer(req);

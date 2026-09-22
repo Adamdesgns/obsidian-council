@@ -8,6 +8,12 @@ Double-click `START-COUNCIL.cmd`. The terminal prints one private local link. Op
 
 The page remembers the owner token in that browser and removes it from the address bar. Council listens only on `127.0.0.1`; do not expose its port.
 
+## Use it from your phone
+
+Install Tailscale on this PC and your phone, sign both into the same tailnet, then double-click `START-COUNCIL-PHONE.cmd`. It starts a private HTTPS Tailscale Serve address and prints the one owner link to open on your phone. Keep the PC awake and the launcher window open.
+
+Council still listens only on `127.0.0.1`. The phone launcher admits only this PC's exact MagicDNS hostname through Tailscale; it does not use Tailscale Funnel or publish Council to the public internet. After the first visit, use the browser's **Add to Home Screen** action for an app icon.
+
 ## Work-order flow
 
 1. Create a chamber and discuss the work with `@codex` or `@claude` in Conversation.
@@ -45,7 +51,7 @@ npm run preview:fake
 
 ## Verification
 
-- 121 automated tests pass.
+- 125 automated tests pass.
 - A real Windows proof completed `Codex plan → owner approval → Codex coding → Codex read-only review → owner acceptance`.
 - A second real Windows proof completed the same lifecycle with Claude as planner/reviewer and Codex as coder.
 - The build changed a disposable module from `1` to `2`, ran its test successfully, and recorded a verified `workspace-write` sandbox policy.
@@ -57,6 +63,7 @@ Evidence: `evidence/2026-09-22-windows-codex/live-proof.json`.
 
 ```text
 START-COUNCIL.cmd       one-click Windows launcher
+START-COUNCIL-PHONE.cmd one-click private Tailscale phone launcher
 src/council.mjs         service and dispatcher entry point
 src/api.mjs             loopback API, tokens, work-order endpoints and HALT
 src/work-orders.mjs     plan, approval, coding, review and acceptance lifecycle

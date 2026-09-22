@@ -20,12 +20,16 @@ export async function startCouncil(opts = {}) {
   const config = { ...(opts.config || {}) };
   if (opts.port != null) config.port = opts.port;
   else if (process.env.COUNCIL_PORT) config.port = Number(process.env.COUNCIL_PORT);
+  if (!config.allowed_hosts && process.env.COUNCIL_ALLOWED_HOSTS) {
+    config.allowed_hosts = process.env.COUNCIL_ALLOWED_HOSTS.split(",").map((s) => s.trim()).filter(Boolean);
+  }
 
   const limits=opts.limits || loadLimits();
   const api = createApi({ home, config, limits, usageService: opts.usageService, usageFixture: opts.usageFixture });
   const bound = await api.listen();
   const port = api.server.address().port;
   const base = `http://${bound.host}:${port}`;
+  const publicBase = String(opts.publicUrl || process.env.COUNCIL_PUBLIC_URL || base).replace(/\/$/, "");
 
   const dispatcher = createDispatcher({
     home,
@@ -52,7 +56,7 @@ export async function startCouncil(opts = {}) {
   out("  The Obsidian Council is up.");
   out("");
   out(`  Open this link (it carries your owner token, keep it private):`);
-  out(`  ${base}/#owner=${api.tokens.owner}`);
+  out(`  ${publicBase}/#owner=${api.tokens.owner}`);
   out("");
   out(`  Home:   ${home}`);
   out(`  Halt:   ${halted ? `HALTED since ${haltSince}` : "clear (members may run)"}`);
@@ -68,7 +72,7 @@ export async function startCouncil(opts = {}) {
     try { await api.close(); } catch { /* */ }
   }
 
-  return { api, dispatcher, home, port, base, halted, close };
+  return { api, dispatcher, home, port, base, publicBase, halted, close };
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

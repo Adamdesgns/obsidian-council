@@ -117,3 +117,62 @@ describe("P2-3 loopback API", () => {
     assert.equal(r.status, 401);
   });
 });
+
+describe("private Tailscale proxy", () => {
+  let home, api, port;
+  const tailHost = "adam-pc.tail1234.ts.net";
+
+  before(async () => {
+    home = tempHome();
+    api = createApi({ home, config: { host: "127.0.0.1", port: 0, allowed_hosts: [tailHost] } });
+    await new Promise((resolve, reject) => {
+      api.server.listen(0, "127.0.0.1", resolve);
+      api.server.once("error", reject);
+    });
+    port = api.server.address().port;
+  });
+
+  after(async () => {
+    try { await api.close(); } catch { /* ignore */ }
+    try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("accepts the configured tailnet hostname and matching HTTPS origin", async () => {
+    const r = await req(port, {
+      path: "/owner/state",
+      token: api.tokens.owner,
+      headers: { Host: tailHost, Origin: `https://${tailHost}` },
+    });
+    assert.equal(r.status, 200);
+  });
+
+  it("rejects another tailnet hostname", async () => {
+    const r = await req(port, {
+      path: "/owner/state",
+      token: api.tokens.owner,
+      headers: { Host: "stranger.tail1234.ts.net", Origin: "https://stranger.tail1234.ts.net" },
+    });
+    assert.equal(r.status, 403);
+  });
+
+  it("serves installable web app assets without a bearer token", async () => {
+    const manifest = await req(port, { path: "/manifest.webmanifest", headers: { Host: tailHost } });
+    const icon = await req(port, { path: "/council-icon.svg", headers: { Host: tailHost } });
+    assert.equal(manifest.status, 200);
+    assert.equal(manifest.json.short_name, "Council");
+    assert.equal(icon.status, 200);
+    assert.match(icon.text, /<svg/);
+  });
+
+  it("rejects broad or malformed allowed host configuration", () => {
+    const badHome = tempHome();
+    try {
+      assert.throws(
+        () => createApi({ home: badHome, config: { allowed_hosts: ["*.ts.net"] } }),
+        /invalid_allowed_host/
+      );
+    } finally {
+      try { rmSync(badHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+});

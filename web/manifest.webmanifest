@@ -1,0 +1,11 @@
+{
+  "name": "The Obsidian Council",
+  "short_name": "Council",
+  "description": "Plan, approve, and monitor AI coding work from your phone.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0e0f12",
+  "theme_color": "#0e0f12",
+  "icons": [{ "src": "/council-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
