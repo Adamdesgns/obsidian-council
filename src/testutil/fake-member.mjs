@@ -48,12 +48,13 @@ if (process.env.FAKE_SCRIPT) {
   const script = JSON.parse(process.env.FAKE_SCRIPT);
   if (script.delay) await new Promise(r => setTimeout(r, script.delay));
   if (script.stderr) console.error(script.stderr);
-  console.log(JSON.stringify({type:"result",result:script.text || "",item:{type:"agent_message",text:script.text || ""}}));
+  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:script.text || "",item:{type:"agent_message",text:script.text || ""}}));
   process.exit(script.exit || 0);
 }
 
 const out = {
   type: "result",
+  subtype: "success", is_error: false,
   result: mode === "secret"
     ? `ok planted=${planted || "sk-testSECRETVALUE999"}`
     : `fake-ok mode=${mode} bytes=${stdin.length}`,

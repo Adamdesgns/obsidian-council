@@ -86,6 +86,7 @@ export function normalizeAccount(raw, now = Date.now()) {
     sourceLabel: cleanText(a.sourceLabel, 80) || "Unknown source",
     reason: cleanText(a.reason, 160) || null,
     checkedAt: isoOrNull(a.checkedAt),
+    simulated: a.simulated === true || a.status === "simulated",
     pools: [...pools.values()],
   };
 }
@@ -96,7 +97,12 @@ export function normalizeAccount(raw, now = Date.now()) {
  *  marked fresh. Source-timestamp freshness closes that gap. */
 export function ageAccount(account, now = Date.now(), maxAgeMs = 5 * 60_000) {
   if (!account || account.status === "unavailable") return account;
+  account = {...account, pools: account.pools.map(p => ({...p, windows:p.windows.map(w => ({...w,
+    refreshDue:w.resetsAt != null && Date.parse(w.resetsAt) <= now,
+  }))}))};
+  if(account.pools.some(p=>p.windows.some(w=>w.refreshDue)))return {...account,status:"stale",reason:"Reset time passed; refresh the source before trusting this reading."};
   const checkedMs = account.checkedAt ? Date.parse(account.checkedAt) : NaN;
+  if(checkedMs > now + 60_000)return {...account,status:"stale",reason:"Source timestamp is in the future."};
   if (!Number.isFinite(checkedMs)) {
     if (account.status === "fresh" || account.status === "simulated" || account.status === "manual") {
       return {

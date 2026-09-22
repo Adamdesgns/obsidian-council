@@ -81,7 +81,7 @@ describe("v0.1 first run (src/council.mjs)", () => {
       assert.equal(st.status, 200, st.text);
       assert.equal(st.json.halt, false);
       assert.equal(st.json.events.ok, true, "record chain verifies on a fresh home");
-      assert.deepEqual(st.json.members.map((m) => m.id).sort(), ["claude", "codex", "fable", "grok"]);
+      assert.deepEqual(st.json.members.map((m) => m.id).sort(), ["claude", "codex", "cursor", "fable", "grok"]);
 
       const bad = await api(b.base, "0".repeat(64), "/owner/state");
       assert.equal(bad.status, 401);

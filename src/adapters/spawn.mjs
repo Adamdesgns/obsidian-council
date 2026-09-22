@@ -7,10 +7,11 @@ import { randomUUID } from "node:crypto";
 import * as claude from "./claude.mjs";
 import * as codex from "./codex.mjs";
 import * as grok from "./grok.mjs";
+import * as cursor from "./cursor.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 import { seatOf, allSeats, accountOf } from "../seats.mjs";
-const ADAPTERS = { claude, codex, grok };
+const ADAPTERS = { claude, codex, grok, cursor };
 
 const KEEP = [
   "PATH", "Path", "SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP",
@@ -69,6 +70,7 @@ function resolveCli(member, opts = {}) {
       fake: true,
     };
   }
+  if(member==="cursor"){const c=cursor.connection();return c.ok?{exe:c.exe,prefix:c.prefix,found:true}:{found:false};}
   const HOME = process.env.USERPROFILE || process.env.HOME || "";
   const APPDATA = process.env.APPDATA || join(HOME, "AppData", "Roaming");
   const LOCALAPPDATA = process.env.LOCALAPPDATA || join(HOME, "AppData", "Local");
@@ -128,12 +130,13 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   if (argvOrPacket && !Array.isArray(argvOrPacket)) {
     if (!adapter) throw new Error("unknown member adapter: " + member);
     argv = adapter.argsFor(argvOrPacket, {
-      model: seat?.model,
+      model: opts.model || seat?.model || (member==="cursor"?cursor.connection().model:null),
       resume: opts.resume,
       persist: opts.persist,
       newId: opts.newId,
       cwd,
       role,
+      maxTurns: opts.maxTurns,
     });
   }
 

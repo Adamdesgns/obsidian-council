@@ -1,6 +1,6 @@
 # Usage panel: source map
 
-Status as of 2026-09-20: **nothing is connected.** The panel ships with honest
+Status as of 2026-09-22: **no real reading activated in this session.** The panel ships with honest
 "Unavailable" readings for all four services. The numbers in the fake preview
 are fixtures and are labelled SIMULATED on screen and in the API (`mode`,
 per-account `simulated`, `status`).
@@ -27,8 +27,15 @@ provider error, or a local auth path (normalization also strips these).
 - **The Codex assistant's usage tool** belongs to the assistant host, not to
   the standalone Council server.
 
-## Known gap, tracked separately
+## September 22 reader and routing correction
 
-`src/work-orders.mjs` still routes non-Cursor implementation back to Codex.
-That conflicts with the cost-first policy (Codex/Claude plan, lower-cost models
-code). This panel does not change it.
+The default-off Codex metadata reader is wired through sources.mjs. Opt-in requires
+CODEX_LOCAL_USAGE_READER=1; CODEX_USAGE_SESSION_DIR may name the sessions root.
+It follows dated directories, reads bounded tails rather than skipping large logs,
+and recognizes event_msg payload.type=token_count with rate_limits.primary/secondary.
+Only quota numbers/timestamps are returned. Real activation was not performed.
+
+Codex/Claude coding fallback is removed. Both can plan and review. Grok's read-only
+adapter cannot be a builder. Cursor's work lifecycle passes fake tests, but the live
+native Windows CLI failed filesystem-containment preflight and stays blocked.
+See evidence/2026-09-22-takeover/REPORT.md for actual connection state.

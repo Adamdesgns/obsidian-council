@@ -3,6 +3,7 @@
   "port": 4777,
   "lease_ms": 60000,
   "seats": [
+    {"id":"cursor","adapter":"cursor","account":"cursor","role":"executor"},
     {
       "id": "codex",
       "adapter": "codex",

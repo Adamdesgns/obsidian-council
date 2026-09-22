@@ -1,169 +1,84 @@
-// src/usage/codex-local-reader.mjs — OPTIONAL Codex local-session usage reader.
-// Default OFF. Reads only token_count rate-limit metadata from synthetic JSONL
-// fixtures (or bounded files when activated). Never logs conversation text,
-// auth files, account identifiers, or paths.
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
-
-export const DEFAULT_ENABLED = false;
-export const MAX_FILES = 8;
-export const MAX_BYTES_PER_FILE = 256 * 1024;
-export const MAX_TOTAL_BYTES = 1 * 1024 * 1024;
-export const MAX_LINES_PER_FILE = 2_000;
-
-const ALLOWED_RATE_KEYS = new Set([
-  "used_percent", "remaining_percent", "window_minutes", "resets_at",
-  "limit", "used", "remaining", "plan_type",
-  "usedPercent", "remainingPercent", "windowMinutes", "resetsAt",
-]);
-
-export function isEnabled(env = process.env) {
-  return env.CODEX_LOCAL_USAGE_READER === "1" || env.CODEX_LOCAL_USAGE_READER === "true";
+// Opt-in local quota reader. Only numeric quota metadata is returned.
+import {openSync,closeSync,readSync,fstatSync,lstatSync,opendirSync} from "node:fs";
+import {join} from "node:path";
+export const DEFAULT_ENABLED=false,MAX_FILES=8,MAX_BYTES_PER_FILE=256*1024,MAX_TOTAL_BYTES=1024*1024,MAX_LINES_PER_FILE=2000;
+const MAX_ENTRIES=4096;
+export function isEnabled(env=process.env){return ["1","true"].includes(env.CODEX_LOCAL_USAGE_READER);}
+const finite=v=>typeof v==="number"&&Number.isFinite(v);
+function cleanRates(raw){
+  if(!raw||typeof raw!=="object")return null;
+  const out={};for(const k of ["used_percent","remaining_percent","window_minutes","resets_at"])if(finite(raw[k]))out[k]=raw[k];
+  if(!finite(out.used_percent)&&!finite(out.remaining_percent))return null;
+  if(out.resets_at!=null&&!Number.isFinite(new Date(out.resets_at*1000).getTime()))delete out.resets_at;
+  return out;
 }
-
-export function extractTokenCountRates(event) {
-  if (!event || (event.type !== "token_count" && event.kind !== "token_count")) return null;
-  const src = event.rate_limit || event.rateLimit || event.rates || event.info || {};
-  const out = {};
-  for (const k of Object.keys(src)) {
-    if (ALLOWED_RATE_KEYS.has(k)) out[k] = src[k];
-  }
-  return Object.keys(out).length ? out : null;
+export function extractTokenCountRates(event){
+  const p=event?.type==="event_msg"?event.payload:event;
+  if(p?.type!=="token_count"&&p?.kind!=="token_count")return null;
+  if(p.rate_limits){const primary=cleanRates(p.rate_limits.primary),secondary=cleanRates(p.rate_limits.secondary);return primary||secondary?{primary,secondary}:null;}
+  return cleanRates(p.rate_limit||p.rateLimit||p.rates);
 }
-
-function eventTimestampMs(event) {
-  if (!event) return NaN;
-  if (typeof event.timestamp === "string") {
-    const ms = Date.parse(event.timestamp);
-    if (Number.isFinite(ms)) return ms;
-  }
-  if (typeof event.timestamp === "number" && Number.isFinite(event.timestamp)) {
-    // epoch seconds vs ms
-    return event.timestamp < 1e12 ? event.timestamp * 1000 : event.timestamp;
-  }
-  return NaN;
+function windowsFor(rates){
+  return ("primary" in rates?Object.entries(rates):[["primary",rates]]).filter(([,r])=>r).map(([id,r])=>({
+    id,label:r.window_minutes>0?r.window_minutes+" minutes":id,durationMinutes:r.window_minutes>0?r.window_minutes:null,
+    usedPercent:r.used_percent,remainingPercent:r.remaining_percent,resetsAt:r.resets_at==null?null:new Date(r.resets_at*1000).toISOString(),
+  }));
 }
-
-function ratesToWindows(rates, now) {
-  const used = rates.used_percent ?? rates.usedPercent;
-  const remaining = rates.remaining_percent ?? rates.remainingPercent;
-  const windowMin = rates.window_minutes ?? rates.windowMinutes;
-  const resetsAt = rates.resets_at ?? rates.resetsAt;
-  const windows = [];
-  if (used != null || remaining != null || windowMin != null) {
-    windows.push({
-      id: "session",
-      label: windowMin ? `${windowMin} minutes` : "Session",
-      durationMinutes: typeof windowMin === "number" ? windowMin : null,
-      usedPercent: typeof used === "number" ? used : undefined,
-      remainingPercent: typeof remaining === "number" ? remaining : undefined,
-      resetsAt: typeof resetsAt === "string" ? resetsAt
-        : typeof resetsAt === "number" ? new Date(resetsAt < 1e12 ? resetsAt * 1000 : resetsAt).toISOString()
-        : undefined,
-    });
-  }
-  return windows;
-}
-
-/** Scan JSONL content (string). Returns latest valid token_count snapshot or null. */
-export function parseJsonlTokenCounts(text, { maxLines = MAX_LINES_PER_FILE } = {}) {
-  if (typeof text !== "string") return null;
-  let latest = null;
-  let latestMs = -Infinity;
-  const lines = text.split(/\r?\n/).slice(0, maxLines);
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
-    const rates = extractTokenCountRates(event);
-    if (!rates) continue;
-    const ms = eventTimestampMs(event);
-    if (!Number.isFinite(ms)) continue;
-    if (ms >= latestMs) {
-      latestMs = ms;
-      latest = { checkedAt: new Date(ms).toISOString(), rates, simulated: true, source: "simulated" };
-    }
+export function parseJsonlTokenCounts(text,{maxLines=MAX_LINES_PER_FILE,simulated=true}={}){
+  if(typeof text!=="string")return null;let latest=null,latestMs=-Infinity;
+  for(const line of text.split(/\r?\n/).slice(-maxLines)){
+    if(!/"(?:type|kind)"\s*:\s*"token_count"/.test(line))continue;
+    let e;try{e=JSON.parse(line);}catch{continue;}
+    const rates=extractTokenCountRates(e);if(!rates)continue;
+    const ms=typeof e.timestamp==="string"?Date.parse(e.timestamp):finite(e.timestamp)?(e.timestamp<1e12?e.timestamp*1000:e.timestamp):NaN;
+    if(!Number.isFinite(ms)||!Number.isFinite(new Date(ms).getTime())||ms<latestMs)continue;
+    latestMs=ms;latest={checkedAt:new Date(ms).toISOString(),rates,simulated,source:simulated?"simulated":"local"};
   }
   return latest;
 }
-
-/**
- * Read usage from a directory of JSONL files. Default-off via isEnabled.
- * Never returns paths in the snapshot. Caps files/bytes/lines.
- */
-export function readCodexLocalUsage({
-  dir,
-  env = process.env,
-  now = Date.now(),
-} = {}) {
-  if (!isEnabled(env)) {
-    return { enabled: false, snapshots: [], scannedFiles: 0, scannedBytes: 0 };
+export function readCodexLocalUsage({dir,env=process.env,simulated=true}={}){
+  const result={enabled:isEnabled(env),snapshots:[],scannedFiles:0,scannedBytes:0};if(!result.enabled)return result;
+  if(typeof dir!=="string"||!dir)return {...result,error:"no-dir"};
+  const candidates=[];let entries=0;
+  function visit(path,depth){
+    if(entries>=MAX_ENTRIES||depth>4)return;
+    let handle;const children=[];
+    try{
+      if(lstatSync(path).isSymbolicLink())return;
+      handle=opendirSync(path);let entry;
+      while(entries<MAX_ENTRIES&&(entry=handle.readSync())){entries++;children.push(entry);}
+    }catch{return;}finally{if(handle)handle.closeSync();}
+    children.sort((a,b)=>b.name.localeCompare(a.name));
+    for(const entry of children){
+      if(entry.isSymbolicLink())continue;const full=join(path,entry.name);
+      if(entry.isDirectory()&&/^\d{2,4}$/.test(entry.name))visit(full,depth+1);
+      else if(entry.isFile()&&entry.name.endsWith(".jsonl")&&(simulated||entry.name.startsWith("rollout-"))){
+        try{const s=lstatSync(full);if(!s.isSymbolicLink())candidates.push({full,mtime:s.mtimeMs});}catch{}
+      }
+    }
   }
-  if (!dir || typeof dir !== "string") {
-    return { enabled: true, snapshots: [], scannedFiles: 0, scannedBytes: 0, error: "no-dir" };
+  visit(dir,0);candidates.sort((a,b)=>b.mtime-a.mtime);
+  for(const file of candidates.slice(0,MAX_FILES)){
+    if(result.scannedBytes>=MAX_TOTAL_BYTES)break;let fd;
+    try{
+      fd=openSync(file.full,"r");const size=fstatSync(fd).size,length=Math.min(size,MAX_BYTES_PER_FILE,MAX_TOTAL_BYTES-result.scannedBytes);
+      const buffer=Buffer.alloc(length),start=size-length,read=readSync(fd,buffer,0,length,start);
+      result.scannedFiles++;result.scannedBytes+=read;
+      let text=buffer.subarray(0,read).toString("utf8");
+      if(start>0){const nl=text.indexOf("\n");text=nl<0?"":text.slice(nl+1);}
+      const snap=parseJsonlTokenCounts(text,{simulated});if(snap)result.snapshots.push(snap);
+    }catch{}finally{if(fd!==undefined)closeSync(fd);}
   }
-  let names;
-  try { names = readdirSync(dir); } catch {
-    return { enabled: true, snapshots: [], scannedFiles: 0, scannedBytes: 0, error: "dir-unreadable" };
-  }
-  const files = names.filter(n => n.endsWith(".jsonl")).slice(0, MAX_FILES);
-  let scannedBytes = 0;
-  const snapshots = [];
-  let scannedFiles = 0;
-  for (const name of files) {
-    if (scannedBytes >= MAX_TOTAL_BYTES) break;
-    const full = join(dir, name);
-    let size;
-    try { size = statSync(full).size; } catch { continue; }
-    if (size > MAX_BYTES_PER_FILE) continue;
-    if (scannedBytes + size > MAX_TOTAL_BYTES) break;
-    let text;
-    try { text = readFileSync(full, "utf8"); } catch { continue; }
-    scannedFiles += 1;
-    scannedBytes += text.length;
-    const snap = parseJsonlTokenCounts(text);
-    if (snap) snapshots.push(snap);
-  }
-  // Prefer latest across files
-  snapshots.sort((a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt));
-  return { enabled: true, snapshots, scannedFiles, scannedBytes };
+  result.snapshots.sort((a,b)=>Date.parse(b.checkedAt)-Date.parse(a.checkedAt));return result;
 }
-
-/** Adapter factory for createUsageService — only when env gate is on + fixtureDir set. */
-export function codexLocalAdapter({ fixtureDir, env = process.env } = {}) {
-  return {
-    async fetch(now) {
-      const result = readCodexLocalUsage({ dir: fixtureDir, env, now });
-      if (!result.enabled) {
-        return {
-          accountId: "codex", service: "codex", status: "unavailable",
-          sourceLabel: "Codex local reader (off)",
-          reason: "CODEX_LOCAL_USAGE_READER is not enabled.",
-          checkedAt: null, pools: [],
-        };
-      }
-      const snap = result.snapshots[0];
-      if (!snap) {
-        return {
-          accountId: "codex", service: "codex", status: "unavailable",
-          sourceLabel: "Codex local reader",
-          reason: "No token_count events found in bounded scan.",
-          checkedAt: null, pools: [],
-        };
-      }
-      return {
-        accountId: "codex",
-        service: "codex",
-        status: "simulated",
-        sourceLabel: "Simulated · Codex local-session reader",
-        checkedAt: snap.checkedAt,
-        pools: [{
-          id: "codex-local",
-          label: "Codex local session",
-          modelIds: [],
-          windows: ratesToWindows(snap.rates, now),
-        }],
-      };
-    },
-  };
+export function codexLocalAdapter({dir,fixtureDir,env=process.env}={}){
+  const simulated=fixtureDir!=null;
+  return {async fetch(){
+    const result=readCodexLocalUsage({dir:fixtureDir??dir,env,simulated});
+    const base={accountId:"codex",service:"codex",sourceLabel:simulated?"Simulated · Codex local reader":"Codex local session metadata",checkedAt:null,pools:[]};
+    if(!result.enabled)return {...base,status:"unavailable",reason:"Local usage reader is disabled."};
+    const snap=result.snapshots[0];if(!snap)return {...base,status:"unavailable",reason:"No quota metadata found in the bounded scan."};
+    return {...base,status:simulated?"simulated":"fresh",simulated,checkedAt:snap.checkedAt,
+      pools:[{id:"codex-shared",label:"Codex account",modelIds:[],windows:windowsFor(snap.rates)}]};
+  }};
 }

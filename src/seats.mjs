@@ -7,7 +7,7 @@ export function validateSeats(seats) {
   for (const s of seats) {
     if (!/^[a-z][a-z0-9-]*$/.test(s.id) || ["owner", "engine"].includes(s.id) || seen.has(s.id))
       throw new Error("invalid or duplicate seat");
-    if (!["claude", "codex", "grok"].includes(s.adapter) || !s.account || !["deliberator", "executor"].includes(s.role))
+    if (!["claude", "codex", "grok", "cursor"].includes(s.adapter) || !s.account || !["deliberator", "executor"].includes(s.role))
       throw new Error("invalid seat adapter, account or role");
     if (s.model != null && (typeof s.model !== "string" || !s.model.trim())) throw new Error("invalid model");
     seen.add(s.id);

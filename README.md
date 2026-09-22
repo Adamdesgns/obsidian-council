@@ -4,13 +4,13 @@ A local delegation desk where your AI coding CLIs pass real work to each other, 
 
 ## Local Work Orders (not released)
 
-The primary local workflow is **Delegate work**: give the Council an objective, an absolute project or isolated-worktree path, and a specialist. Codex inspects that workspace read-only and produces an implementation plan. You approve the exact plan, then the Council passes it to the selected lane and returns the result to the same screen.
+The primary workflow is **Conversation → plan together → approve → lower-cost coding → planner review → owner acceptance**. Choose Codex or Claude as planner. The selected chamber's recent conversation follows the work order. Feedback requests a revised plan and invalidates the old approval.
 
-- **Codex:** the approved plan goes directly to the certified workspace-write Codex build lane.
-- **Claude or Grok:** the selected model inspects the project read-only and produces implementation guidance; the sandboxed Codex lane applies that handoff and runs local validation.
-- **Cursor:** the Council produces one complete Cursor handoff packet. Cursor has no callable agent CLI on this PC, so this lane is visibly `handoff_ready` rather than pretending that Cursor started.
+- **Codex and Claude plan and review.** Neither is an automatic coding fallback.
+- **Cursor connection:** the local adapter pins an explicitly configured model, dispatches an approved plan, and returns its report to the original planner. The complete sequence passes fake-provider HTTP and browser tests. **Live native Windows execution is blocked:** the official 2026.09.18 agent reports no filesystem isolation. Its separate runtime is downloaded, but is not signed in. A contained Linux worker is the proposed next connection, not an implemented transport.
+- **Grok:** its current adapter is read-only, so coding waits honestly. A prepared packet is never shown as a running or completed worker.
 
-Work orders survive restarts, reject duplicate submissions, pause on provider failure, resume only unfinished work, and stop under HALT. They never push, merge, deploy, spend, use credentials or contact anyone. Those remain separate owner-authorized actions.
+Work orders reject duplicate submissions, pause on provider failure, and stop under HALT. Interrupted coding pauses for inspection before an owner explicitly resumes it. Live provider runs use the CLI's normal login and allowance; the Council's run ceilings are not a dollar budget. Work prompts prohibit push, merge, deploy, purchases and external communication. Worker permissions and workspace containment must be certified before enabling a real coding transport.
 
 You type one line on the Floor: `@codex write the plan. @grok tear it apart. @codex revise it.`
 Codex writes, Grok critiques, Codex revises, and every message, delivery and model run lands in one
@@ -26,7 +26,7 @@ The local build adds **Deliberate**: two members answer independently, compare a
 
 Run `npm run preview:fake` for a safe local walkthrough with simulated providers and a fresh temporary home. The printed link opens that fixture; type `stop` in its terminal to close it. Ordinary `npm start` uses your real configured CLIs and home.
 
-Four seats use three adapters: `codex`, `grok`, `claude`, and `fable` (another Claude seat sharing the same quota). The `fable` seat uses the installed Claude CLI default unless you set its `model` in `config/council.json`; no specific live model version is certified by fake tests.
+Five seats use four adapters: `codex`, `grok`, `claude`, `fable` (another Claude seat sharing the same quota), and opt-in `cursor`. The `fable` seat uses the installed Claude CLI default unless you set its `model` in `config/council.json`; no specific live model version is certified by fake tests.
 
 See [local acceptance evidence](docs/evidence/deliberation-local-2026-09-19.md) and [corrected implementation contract](docs/superpowers/plans/2026-09-19-deliberation-corrections.md). Main/release and Adam's human acceptance remain separate gates.
 
@@ -57,7 +57,7 @@ See [local acceptance evidence](docs/evidence/deliberation-local-2026-09-19.md) 
   tested, but Codex refuses it under `approval_policy=never`, and Grok exits on a project MCP
   config. Members reply by plain text instead, which is what the live proof used.
 - Claude and Grok remain read-only on Windows; only Codex has the certified workspace-write sandbox.
-- Cursor can receive a complete handoff packet, but automated Cursor execution is unavailable until a supported agent CLI or bridge exists.
+- Cursor's lifecycle is implemented and fixture-tested, but its native Windows coding connection remains blocked on workspace containment and login. See [takeover evidence](evidence/2026-09-22-takeover/REPORT.md).
 - No phone, no remote access, no auth beyond the loopback bearer tokens. Do not expose the port.
 - Windows only for now. The spawn code uses `taskkill` and Windows paths.
 

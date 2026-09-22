@@ -90,23 +90,28 @@
     </div>
     <div id="delegatePanel">
       <h2>Delegate work</h2>
-      <p>Codex plans first. After you approve the exact plan, the selected specialist receives it and the sandboxed Codex build lane applies the work.</p>
+      <p>Discuss the work in Conversation with @codex or @claude. Your chosen planner uses that conversation to prepare a plan. Approve it to send coding to the connected Cursor model, then the planner reviews the result here for your acceptance.</p>
+      <p id="workerConnection" role="status">Checking coding connection…</p>
       <textarea id="workObjective" placeholder="What should be built?"></textarea>
       <div class="row">
+        <label for="workPlanner">Planner</label><select id="workPlanner"><option value="codex">Codex</option><option value="claude">Claude</option></select>
         <input id="workWorkspace" placeholder="Absolute project or isolated worktree path" style="flex:1"/>
         <select id="workWorker">
-          <option value="codex">Codex builds</option>
-          <option value="claude">Claude handoff → Codex builds</option>
-          <option value="grok">Grok handoff → Codex builds</option>
-          <option value="cursor">Cursor handoff packet</option>
+          <option value="cursor">Cursor coding worker</option>
+          <option value="claude">Claude review, then wait for coding worker</option>
+          <option value="grok">Grok — coding connection unavailable</option>
+          <option value="codex">Codex — plan only</option>
         </select>
         <button id="startWork">Create implementation plan</button>
       </div>
       <select id="workSelect" style="width:100%"><option value="">No work orders yet</option></select>
       <p id="workStatus" role="status">No work order selected.</p>
       <pre id="workText"></pre>
-      <div class="row"><button id="approveWork" disabled>Approve plan and hand off</button><button id="resumeWork" disabled>Resume</button><button id="cancelWork" disabled>Cancel</button></div>
+      <div class="row"><button id="approveWork" disabled>Approve plan and hand off</button><button id="acceptWork" disabled>Accept reviewed work</button><button id="resumeWork" disabled>Resume</button><button id="cancelWork" disabled>Cancel</button></div>
       <p id="workError" role="alert"></p>
+      <label for="workFeedback">Discuss a change to this plan or result</label>
+      <textarea id="workFeedback" placeholder="Tell your planner what to change before coding continues."></textarea>
+      <button id="reviseWork" disabled>Send feedback to planner</button>
     </div>
     <h2>Conversation</h2>
     <div id="log"></div>
@@ -294,13 +299,15 @@ document.getElementById("chamberSelect").addEventListener("change", pollMessages
 let workRows=[],selectedWork=localStorage.getItem("council.workOrder")||"",workBusy=false;
 function renderWork(){
   const row=workRows.find(r=>r.id===selectedWork);
-  const labels={planning:"Codex is building the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Sandboxed Codex build is running",completed:"Work completed",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Cursor handoff packet ready"};
+  const labels={planning:"Planner is preparing the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Selected coding worker is running",reviewing:"Planner is reviewing the coding result",awaiting_acceptance:"Review ready — inspect the evidence and accept or cancel",completed:"Work accepted by you",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Cursor packet ready — not dispatched",waiting_worker:"Waiting for a connected coding worker"};
   document.getElementById("workStatus").textContent=row?(labels[row.state]||row.state)+(row.state==="specialist"?row.worker:""):"No work order selected.";
-  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE","Codex plan → "+row.worker+(row.worker!=="codex"&&row.worker!=="cursor"?" specialist → Codex build":""),
+  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE",row.planner+" plan → your approval → "+(row.worker==="cursor"?"Cursor ("+(row.worker_model||"model not connected")+") → "+row.planner+" review → your acceptance":row.worker==="claude"?"Claude review → wait for coding worker":"wait for coding worker (selected: "+row.worker+")"),
     ...(row.plan?["IMPLEMENTATION PLAN",row.plan]:[]),...(row.specialist_output?["SPECIALIST HANDOFF",row.specialist_output]:[]),
-    ...(row.result?["BUILD REPORT",row.result]:[]),...(row.handoff?["CURSOR PACKET",row.handoff]:[]),...(row.stall_detail?["PAUSED",row.stall_detail]:[])]:[];
+    ...(row.result?["BUILD REPORT",row.result]:[]),...(row.review?["PLANNER REVIEW",row.review]:[]),...(row.handoff?["WORKER PACKET",row.handoff]:[]),...(row.stall_detail?["PAUSED",row.stall_detail]:[])]:[];
   document.getElementById("workText").textContent=parts.join("\n\n");
   document.getElementById("approveWork").disabled=workBusy||row?.state!=="awaiting_approval";
+  document.getElementById("acceptWork").disabled=workBusy||row?.state!=="awaiting_acceptance";
+  document.getElementById("reviseWork").disabled=workBusy||!["awaiting_approval","awaiting_acceptance","handoff_ready","waiting_worker"].includes(row?.state);
   document.getElementById("resumeWork").disabled=workBusy||row?.state!=="stalled";
   document.getElementById("cancelWork").disabled=workBusy||!row||["completed","cancelled"].includes(row.state);
 }
@@ -308,6 +315,8 @@ async function refreshWork(){
   if(!token())return;
   try{
     const r=await api("/owner/work-orders");workRows=r.work_orders||[];
+    const reason={"cursor-not-enabled":"connection not activated","cursor-model-required":"choose a coding model","cursor-cli-required":"agent not installed","cursor-windows-isolation-unavailable":"this Windows agent cannot restrict edits to the approved workspace"}[r.cursor?.reason]||"connection needs attention";
+    document.getElementById("workerConnection").textContent=r.cursor?.configured?"Cursor configured: "+r.cursor.model+". Authentication and sandbox access are checked when a job runs.":"Cursor is not connected: "+reason+". Plans can be prepared; coding cannot run yet.";
     if(!workRows.some(r=>r.id===selectedWork))selectedWork=workRows[0]?.id||"";
     const sel=document.getElementById("workSelect");sel.innerHTML="";
     for(const row of workRows){const o=document.createElement("option");o.value=row.id;o.textContent=row.objective.slice(0,80);o.selected=row.id===selectedWork;sel.appendChild(o);}
@@ -317,15 +326,25 @@ async function refreshWork(){
 document.getElementById("workSelect").addEventListener("change",()=>{selectedWork=document.getElementById("workSelect").value;localStorage.setItem("council.workOrder",selectedWork);renderWork();});
 let workSubmission=null;
 document.getElementById("startWork").onclick=async()=>{
-  if(workBusy)return;const objective=document.getElementById("workObjective").value.trim(),workspace=document.getElementById("workWorkspace").value.trim(),worker=document.getElementById("workWorker").value;
+  if(workBusy)return;const objective=document.getElementById("workObjective").value.trim(),workspace=document.getElementById("workWorkspace").value.trim(),worker=document.getElementById("workWorker").value,planner=document.getElementById("workPlanner").value||"codex",chamber_id=document.getElementById("chamberSelect").value||null;
   if(!objective||!workspace){document.getElementById("workError").textContent="Enter the objective and absolute workspace path.";return;}
-  if(!workSubmission||workSubmission.objective!==objective||workSubmission.workspace!==workspace||workSubmission.worker!==worker)workSubmission={objective,workspace,worker,key:"work:"+crypto.randomUUID()};
+  if(!workSubmission||workSubmission.objective!==objective||workSubmission.workspace!==workspace||workSubmission.worker!==worker||workSubmission.planner!==planner||workSubmission.chamber_id!==chamber_id)workSubmission={objective,workspace,worker,planner,chamber_id,key:"work:"+crypto.randomUUID()};
   workBusy=true;renderWork();
-  try{const r=await api("/owner/delegate",{method:"POST",body:{objective,workspace,worker,idempotency_key:workSubmission.key,chamber_id:document.getElementById("chamberSelect").value||null}});selectedWork=r.id;localStorage.setItem("council.workOrder",r.id);workSubmission=null;document.getElementById("workError").textContent="";await refreshWork();}
+  try{const r=await api("/owner/delegate",{method:"POST",body:{objective,workspace,worker,planner,idempotency_key:workSubmission.key,chamber_id}});selectedWork=r.id;localStorage.setItem("council.workOrder",r.id);workSubmission=null;document.getElementById("workError").textContent="";await refreshWork();}
   catch(e){document.getElementById("workError").textContent=e.message;}finally{workBusy=false;renderWork();}
 };
-async function workAction(action){const row=workRows.find(r=>r.id===selectedWork);if(!row||workBusy)return;workBusy=true;renderWork();try{await api("/owner/work-order/"+encodeURIComponent(row.id)+"/"+action,{method:"POST",body:action==="approve"?{plan_hash:row.plan_hash}:{}});document.getElementById("workError").textContent="";await refreshWork();}catch(e){document.getElementById("workError").textContent=e.message;}finally{workBusy=false;renderWork();}}
+async function workAction(action){const row=workRows.find(r=>r.id===selectedWork);if(!row||workBusy)return;workBusy=true;renderWork();try{await api("/owner/work-order/"+encodeURIComponent(row.id)+"/"+action,{method:"POST",body:["approve","accept"].includes(action)?{plan_hash:row.plan_hash}:{}});document.getElementById("workError").textContent="";await refreshWork();}catch(e){document.getElementById("workError").textContent=e.message;}finally{workBusy=false;renderWork();}}
 document.getElementById("approveWork").onclick=()=>workAction("approve");
+document.getElementById("acceptWork").onclick=()=>workAction("accept");
+let revisionSubmission=null;
+document.getElementById("reviseWork").onclick=async()=>{
+  const row=workRows.find(r=>r.id===selectedWork),feedback=document.getElementById("workFeedback").value.trim();
+  if(!row||workBusy||!feedback)return;
+  if(!revisionSubmission||revisionSubmission.id!==row.id||revisionSubmission.feedback!==feedback)revisionSubmission={id:row.id,feedback,key:crypto.randomUUID()};
+  workBusy=true;renderWork();
+  try{await api("/owner/work-order/"+encodeURIComponent(row.id)+"/revise",{method:"POST",body:{feedback,idempotency_key:revisionSubmission.key}});revisionSubmission=null;document.getElementById("workFeedback").value="";document.getElementById("workError").textContent="";await refreshWork();}
+  catch(e){document.getElementById("workError").textContent=e.message;}finally{workBusy=false;renderWork();}
+};
 document.getElementById("resumeWork").onclick=()=>workAction("resume");
 document.getElementById("cancelWork").onclick=()=>workAction("cancel");
 

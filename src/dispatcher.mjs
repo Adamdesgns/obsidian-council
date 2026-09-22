@@ -11,13 +11,14 @@ import { prepareBridge, noneBridge, removeGrokBridgeConfig } from "./adapters/br
 import * as claudeAd from "./adapters/claude.mjs";
 import * as codexAd from "./adapters/codex.mjs";
 import * as grokAd from "./adapters/grok.mjs";
+import * as cursorAd from "./adapters/cursor.mjs";
 import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
 
 import { seatOf } from "./seats.mjs";
 import { taskFor, canDispatch, completeReply, stall, haltDeliberations } from "./deliberation.mjs";
-import { workTaskFor, canDispatchWork, completeWorkReply, stallWork, haltWorkOrders } from "./work-orders.mjs";
+import { workTaskFor, canDispatchWork, completeWorkReply, stallWork, haltWorkOrders, recoverUnsupportedWork } from "./work-orders.mjs";
 
-const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd };
+const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd, cursor:cursorAd };
 
 export { parseAddressChain };
 import { fileURLToPath } from "node:url";
@@ -30,6 +31,7 @@ export function createDispatcher(opts = {}) {
   if (opts.scriptedReply && !opts.useFake) throw new Error("scriptedReply requires fake providers");
   const home = ensureHome(opts.home || councilHome());
   const store = opts.store || openStore({ home });
+  recoverUnsupportedWork(store);
   const outbox = opts.outbox || createOutbox(store, { leaseMs: opts.leaseMs });
   const limits = opts.limits || loadLimits();
   const tickMs = opts.tickMs ?? limits.dispatcher?.tick_ms ?? 2000;
@@ -90,6 +92,9 @@ export function createDispatcher(opts = {}) {
     if (isCancelledStop(result)) return "cancelled";
     if (result.exit === null || typeof result.exit === "undefined") return "spawn_error";
     if (result.exit !== 0) return `exit_${result.exit}`;
+    for(const event of parseJsonObjects(result.stdout)){
+      if(event.type==="result"&&(event.is_error===true||String(event.subtype||"").startsWith("error")))return "provider_error_result";
+    }
     return null;
   }
 
@@ -162,6 +167,11 @@ export function createDispatcher(opts = {}) {
 
   async function tick() {
     if (stopped) return;
+    for(const meta of active.values()){
+      if(meta.workOrderId&&store.prepare("SELECT state FROM work_orders WHERE id=?").get(meta.workOrderId)?.state==="cancelled"&&meta.child){
+        killTreeSync(meta.child.pid);
+      }
+    }
     if (isHalted()) {
       haltDeliberations(store);
       haltWorkOrders(store);
@@ -245,6 +255,7 @@ export function createDispatcher(opts = {}) {
     chamber = message.chamber_id || "_";
     const engineTask = taskFor(store, message.id);
     const workTask = workTaskFor(store, message.id);
+    meta.workOrderId=workTask?.work_order_id;
     const managedTask = engineTask || workTask;
     const adapterId = seatOf(member)?.adapter;
 
@@ -273,6 +284,7 @@ export function createDispatcher(opts = {}) {
     // P2-6d/e: Codex + Grok plain-text / bridge=none (bridge cert is Phase 3).
     const plainText = !!managedTask || adapterId === "codex" || adapterId === "grok" || !!opts.disableBridge;
     let packet = buildPacket({ member, chamber, message: msgPayload, plainText });
+    if(workTask)packet=message.content;
 
     const cwd = workTask?.workspace || join(home, "workspaces", member, String(chamber).replace(/[^\w-]/g, "_") || "_");
     mkdirSync(cwd, { recursive: true });
@@ -289,6 +301,8 @@ export function createDispatcher(opts = {}) {
       persist: !engineTask && !resume,
       newId: member === "grok" && !resume ? crypto.randomUUID() : null,
       role: workTask?.phase === "implementing" ? "build" : "review",
+      model: workTask?.worker_model,
+      maxTurns: workTask ? 12 : undefined,
       memberToken: managedTask ? null : tokens[member],
       cwd,
       timeoutMs: opts.timeoutMs,
@@ -400,7 +414,7 @@ export function createDispatcher(opts = {}) {
     if (ad && ad.finalText) {
       try { text = ad.finalText(result) || ""; } catch { text = ""; }
     }
-    if (!text) text = String(result && result.stdout || "").trim().slice(0, 4000);
+    if (!text && adapterId!=="cursor") text = String(result && result.stdout || "").trim().slice(0, 4000);
     let outbound = [];
     try {
       const objs = JSON.parse(result.stdout);
@@ -413,7 +427,7 @@ export function createDispatcher(opts = {}) {
 
     // No ack on a failed / cancelled / timed-out run -- expire lease for reclaim.
     // Resume failures already retried above and are not counted as run_failed for that attempt.
-    const failReason = classifyRunFailure(result);
+    const failReason = classifyRunFailure(result) || (adapterId==="cursor"&&!text?"cursor_no_success_result":null);
     if (failReason) {
       stampBridgeAll(bridgeStatus, { fail: failReason });
       try {

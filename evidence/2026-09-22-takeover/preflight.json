@@ -1,0 +1,22 @@
+{
+  "checkedOn": "2026-09-22",
+  "cursorVersion": "2026.09.18-9a7762b",
+  "source": "https://downloads.cursor.com/lab/2026.09.18-9a7762b/windows/x64/agent-cli-package.zip",
+  "archiveSha256": "9C1FBCDA9F0A39667689A6A3146B549FFEC465CAF47723E0A7BB345142D5BDE4",
+  "bundledNodeSignature": "Valid",
+  "normalLoginStatus": "unauthenticated",
+  "sandboxProbe": {
+    "policy": "workspace_readwrite",
+    "networkDefault": "deny",
+    "result": "refused_before_command_execution",
+    "reason": "Windows sandbox helper only provides network proxy, not filesystem isolation",
+    "sandboxDisabledOrBypassed": false
+  },
+  "installedWslDistributions": [],
+  "liveModelRuns": 0,
+  "realUsageReaderActivated": false,
+  "windowsComponentsChanged": false,
+  "pathChanged": false,
+  "tests": {"passed":120,"failed":0},
+  "completion": "local fixture workflow verified; live coding transport blocked"
+}
