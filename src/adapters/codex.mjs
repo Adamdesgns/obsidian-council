@@ -51,6 +51,8 @@ export function argsFor(packet, opts = {}) {
   const review = [
     ...commonHead,
     "-s", "read-only",
+    "-c", 'windows.sandbox="elevated"',
+    "-c", 'approval_policy="never"',
     "-C", cwd,
     "--color", "never",
   ];

@@ -1,0 +1,6 @@
+{
+  "name": "council-live-proof",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

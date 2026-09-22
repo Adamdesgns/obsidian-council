@@ -236,7 +236,9 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   // Codex Build: verify effective sandbox_policy from rollout
   let buildCheck = null;
   if (member === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
-    buildCheck = codex.verifyBuildResult(result, {home: envExtra.USERPROFILE || envExtra.HOME});
+    // The Codex desktop CLI keeps rollout records in its real profile even
+    // when HOME/TEMP are redirected for the Windows sandbox worker.
+    buildCheck = codex.verifyBuildResult(result, {home: process.env.CODEX_HOME || process.env.USERPROFILE || process.env.HOME});
     if (!buildCheck.ok) {
       result.refused = buildCheck.refused;
       result.buildPolicy = buildCheck.policy;

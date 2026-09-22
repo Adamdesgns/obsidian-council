@@ -1,0 +1,41 @@
+{
+  "provedAt": "2026-09-22T16:51:25.072Z",
+  "route": [
+    "codex-plan",
+    "owner-approval",
+    "codex-build",
+    "codex-review",
+    "owner-acceptance"
+  ],
+  "stateBeforeAcceptance": "awaiting_acceptance",
+  "source": "export const answer = 2;\n",
+  "result": "Changed only `answer.mjs:1` to `export const answer = 2;`.\n\n`npm test` exited `0`: “answer is updated” passed (1 test, 0 failures).\n\nVerified `answer.test.mjs` and `package.json` remain unchanged.",
+  "review": "**Recommendation: accept the functional result, with a change-scope verification limit.**\n\n- `answer.mjs` exports `2`, as approved.\n- `answer.test.mjs` asserts `2`; `package.json` runs `node --test`.\n- Independently ran `npm test` in the exact workspace: exit `0`, “answer is updated” passed, 1 test, 0 failures.\n- No functional defects found.\n\n**Limit:** Git treats this workspace as untracked within a parent repository. No tracked baseline was available to prove that the numeric literal was the only change or that the other files remained unchanged. The worker’s scope claim remains unverified.\n\nNo files were edited.",
+  "runs": [
+    {
+      "member": "codex",
+      "exit": 0,
+      "role": "review",
+      "workspaceWrite": false,
+      "refused": null,
+      "timedOut": false
+    },
+    {
+      "member": "codex",
+      "exit": 0,
+      "role": "build",
+      "workspaceWrite": true,
+      "refused": null,
+      "timedOut": false
+    },
+    {
+      "member": "codex",
+      "exit": 0,
+      "role": "review",
+      "workspaceWrite": false,
+      "refused": null,
+      "timedOut": false
+    }
+  ],
+  "finalState": "completed"
+}

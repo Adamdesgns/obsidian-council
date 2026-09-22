@@ -116,6 +116,8 @@ describe("P2-4 adapters and spawn", () => {
 
     const review = codex.argsFor("review me", { role: "review", cwd: "C:\\ws" });
     assert.ok(review.includes("read-only"));
+    assert.ok(review.includes('windows.sandbox="elevated"'));
+    assert.ok(review.includes('approval_policy="never"'));
     assert.ok(!review.includes("workspace-write"));
   });
 

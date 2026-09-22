@@ -90,24 +90,19 @@
     </div>
     <div id="delegatePanel">
       <h2>Delegate work</h2>
-      <p>Discuss the work in Conversation with @codex or @claude. Your chosen planner uses that conversation to prepare a plan. Approve it to send coding to the connected Cursor model, then the planner reviews the result here for your acceptance.</p>
+      <p>Discuss the work with @codex or @claude. Your chosen planner prepares the plan. After you approve it, Codex codes inside the workspace, the same planner reviews the result, and you decide whether to accept it.</p>
       <p id="workerConnection" role="status">Checking coding connection…</p>
       <textarea id="workObjective" placeholder="What should be built?"></textarea>
       <div class="row">
         <label for="workPlanner">Planner</label><select id="workPlanner"><option value="codex">Codex</option><option value="claude">Claude</option></select>
         <input id="workWorkspace" placeholder="Absolute project or isolated worktree path" style="flex:1"/>
-        <select id="workWorker">
-          <option value="cursor">Cursor coding worker</option>
-          <option value="claude">Claude review, then wait for coding worker</option>
-          <option value="grok">Grok — coding connection unavailable</option>
-          <option value="codex">Codex — plan only</option>
-        </select>
-        <button id="startWork">Create implementation plan</button>
+        <select id="workWorker"><option value="codex">Codex coding lane</option></select>
+        <button id="startWork">Plan this work</button>
       </div>
       <select id="workSelect" style="width:100%"><option value="">No work orders yet</option></select>
       <p id="workStatus" role="status">No work order selected.</p>
       <pre id="workText"></pre>
-      <div class="row"><button id="approveWork" disabled>Approve plan and hand off</button><button id="acceptWork" disabled>Accept reviewed work</button><button id="resumeWork" disabled>Resume</button><button id="cancelWork" disabled>Cancel</button></div>
+      <div class="row"><button id="approveWork" disabled>Approve plan and start coding</button><button id="acceptWork" disabled>Accept reviewed work</button><button id="resumeWork" disabled>Resume</button><button id="cancelWork" disabled>Cancel</button></div>
       <p id="workError" role="alert"></p>
       <label for="workFeedback">Discuss a change to this plan or result</label>
       <textarea id="workFeedback" placeholder="Tell your planner what to change before coding continues."></textarea>
@@ -299,9 +294,9 @@ document.getElementById("chamberSelect").addEventListener("change", pollMessages
 let workRows=[],selectedWork=localStorage.getItem("council.workOrder")||"",workBusy=false;
 function renderWork(){
   const row=workRows.find(r=>r.id===selectedWork);
-  const labels={planning:"Planner is preparing the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Selected coding worker is running",reviewing:"Planner is reviewing the coding result",awaiting_acceptance:"Review ready — inspect the evidence and accept or cancel",completed:"Work accepted by you",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Cursor packet ready — not dispatched",waiting_worker:"Waiting for a connected coding worker"};
+  const labels={planning:"Planner is preparing the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Codex is coding in the approved workspace",reviewing:"Planner is reviewing the actual coding result",awaiting_acceptance:"Review ready — inspect the evidence and accept or cancel",completed:"Work accepted by you",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Coding packet ready — not dispatched",waiting_worker:"Waiting for the coding lane"};
   document.getElementById("workStatus").textContent=row?(labels[row.state]||row.state)+(row.state==="specialist"?row.worker:""):"No work order selected.";
-  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE",row.planner+" plan → your approval → "+(row.worker==="cursor"?"Cursor ("+(row.worker_model||"model not connected")+") → "+row.planner+" review → your acceptance":row.worker==="claude"?"Claude review → wait for coding worker":"wait for coding worker (selected: "+row.worker+")"),
+  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE",row.planner+" plan → your approval → Codex coding → "+row.planner+" review → your acceptance",
     ...(row.plan?["IMPLEMENTATION PLAN",row.plan]:[]),...(row.specialist_output?["SPECIALIST HANDOFF",row.specialist_output]:[]),
     ...(row.result?["BUILD REPORT",row.result]:[]),...(row.review?["PLANNER REVIEW",row.review]:[]),...(row.handoff?["WORKER PACKET",row.handoff]:[]),...(row.stall_detail?["PAUSED",row.stall_detail]:[])]:[];
   document.getElementById("workText").textContent=parts.join("\n\n");
@@ -315,8 +310,7 @@ async function refreshWork(){
   if(!token())return;
   try{
     const r=await api("/owner/work-orders");workRows=r.work_orders||[];
-    const reason={"cursor-not-enabled":"connection not activated","cursor-model-required":"choose a coding model","cursor-cli-required":"agent not installed","cursor-windows-isolation-unavailable":"this Windows agent cannot restrict edits to the approved workspace"}[r.cursor?.reason]||"connection needs attention";
-    document.getElementById("workerConnection").textContent=r.cursor?.configured?"Cursor configured: "+r.cursor.model+". Authentication and sandbox access are checked when a job runs.":"Cursor is not connected: "+reason+". Plans can be prepared; coding cannot run yet.";
+    document.getElementById("workerConnection").textContent=r.builder?.configured?"Codex coding is ready on this PC. Council verifies workspace-write containment on every coding run.":"Codex coding needs attention.";
     if(!workRows.some(r=>r.id===selectedWork))selectedWork=workRows[0]?.id||"";
     const sel=document.getElementById("workSelect");sel.innerHTML="";
     for(const row of workRows){const o=document.createElement("option");o.value=row.id;o.textContent=row.objective.slice(0,80);o.selected=row.id===selectedWork;sel.appendChild(o);}

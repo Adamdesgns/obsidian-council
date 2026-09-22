@@ -9,7 +9,7 @@ import {startWorkOrder,readWorkOrder,workTaskFor,canDispatchWork,completeWorkRep
 import {startCouncil} from "../src/council.mjs";
 
 test("restart pauses an attempted coding run instead of automatically editing twice",t=>{
-  configuredCursor(t);const c=fixture(t),a=startWorkOrder(c.store,{objective:"Restart proof",workspace:c.workspace,idempotency_key:"restart"});
+  configuredCursor(t);const c=fixture(t),a=startWorkOrder(c.store,{objective:"Restart proof",workspace:c.workspace,worker:"cursor",idempotency_key:"restart"});
   reply(c,a.id,"codex","Plan");const row=readWorkOrder(c.store,a.id);
   approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash});const lease=claim(c,row.id,"cursor");
   recoverUnsupportedWork(c.store);
@@ -37,19 +37,18 @@ function configuredCursor(t){
 }
 
 test("either planner carries conversation through coding, review, and exact owner acceptance",t=>{
-  configuredCursor(t);
   for(const planner of ["codex","claude"]){
     const c=fixture(t);
     c.outbox.send({sender:"owner",recipients:[planner],chamber_id:"chat",content:"Keep the button blue",idempotency_key:"chat"});
-    const started=startWorkOrder(c.store,{objective:"Implement agreed button",workspace:c.workspace,planner,worker:"cursor",source_chamber_id:"chat",idempotency_key:planner});
+    const started=startWorkOrder(c.store,{objective:"Implement agreed button",workspace:c.workspace,planner,worker:"codex",source_chamber_id:"chat",idempotency_key:planner});
     let lease=claim(c,started.id,planner);assert.match(lease.message.content,/Keep the button blue/);
     completeWorkReply(c.store,{...lease,member:planner,text:"Exact blue-button plan"});
     let row=readWorkOrder(c.store,started.id);
-    assert.equal(row.planner,planner);assert.equal(row.worker_model,"fixture-worker");
+    assert.equal(row.planner,planner);assert.equal(row.worker,"codex");
     assert.equal(approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash}).state,"implementing");
     assert.equal(approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash}).ok,false);
-    const build=claim(c,row.id,"cursor");assert.equal(canDispatchWork(c.store,build.message.id,"cursor"),true);
-    completeWorkReply(c.store,{...build,member:"cursor",text:"Changed button.js. Tests: 2 passed."});
+    const build=claim(c,row.id,"codex");assert.equal(canDispatchWork(c.store,build.message.id,"codex"),true);
+    completeWorkReply(c.store,{...build,member:"codex",text:"Changed button.js. Tests: 2 passed."});
     assert.equal(readWorkOrder(c.store,row.id).state,"reviewing");
     assert.equal(acceptWork(c.store,row.id,{plan_hash:row.plan_hash}).ok,false);
     lease=claim(c,row.id,planner);assert.match(lease.message.content,/Changed button.js/);
@@ -76,7 +75,7 @@ test("feedback is deduplicated and requires approval of the revised plan",t=>{
 test("HALT cancels undispatched packets and late results cannot resurrect cancelled work",t=>{
   const c=fixture(t),a=startWorkOrder(c.store,{objective:"Packet",workspace:c.workspace,idempotency_key:"halt"});
   reply(c,a.id,"codex","Plan");let row=readWorkOrder(c.store,a.id);
-  approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash});assert.equal(readWorkOrder(c.store,row.id).state,"handoff_ready");
+  approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash});assert.equal(readWorkOrder(c.store,row.id).state,"implementing");
   haltWorkOrders(c.store);assert.equal(readWorkOrder(c.store,row.id).state,"cancelled");
   assert.equal(readWorkOrder(c.store,row.id).handoff,null);
   const b=startWorkOrder(c.store,{objective:"Late",workspace:c.workspace,idempotency_key:"late"});
@@ -86,15 +85,14 @@ test("HALT cancels undispatched packets and late results cannot resurrect cancel
 });
 
 test("a model change cannot silently dispatch approved coding to another model",t=>{
-  configuredCursor(t);const c=fixture(t),a=startWorkOrder(c.store,{objective:"Pinned",workspace:c.workspace,idempotency_key:"pinned"});
+  configuredCursor(t);const c=fixture(t),a=startWorkOrder(c.store,{objective:"Pinned",workspace:c.workspace,worker:"cursor",idempotency_key:"pinned"});
   reply(c,a.id,"codex","Plan");const row=readWorkOrder(c.store,a.id);
   process.env.COUNCIL_CURSOR_MODEL="different";
-  assert.equal(approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash}).state,"handoff_ready");
+  assert.equal(approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash}).state,"waiting_worker");
   assert.match(readWorkOrder(c.store,row.id).stall_detail,/cursor-model-changed/);
 });
 
-test("HTTP fake worker automatically returns to the chosen planner for review",async t=>{
-  configuredCursor(t);
+test("HTTP fake Codex worker automatically returns to the chosen planner for review",async t=>{
   const home=mkdtempSync(join(tmpdir(),"council-loop-")),workspace=mkdtempSync(join(tmpdir(),"council-loop-ws-"));
   const c=await startCouncil({home,port:0,useFake:true,tickMs:20,log:()=>{},
     limits:{daily_ceiling:{codex:100,claude:100,grok:100,cursor:100},timeout_ms:{fake:3000}},
@@ -102,12 +100,12 @@ test("HTTP fake worker automatically returns to the chosen planner for review",a
   t.after(async()=>{await c.close();rmSync(home,{recursive:true,force:true});rmSync(workspace,{recursive:true,force:true});});
   const req=async(path,body,token=c.api.tokens.owner)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+token},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
   const until=async state=>{const end=Date.now()+5000;while(Date.now()<end){const row=readWorkOrder(c.api.store,id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
-  const start=await req("/owner/delegate",{objective:"Build fixture",workspace,planner:"claude",worker:"cursor",idempotency_key:"loop"});
+  const start=await req("/owner/delegate",{objective:"Build fixture",workspace,planner:"claude",worker:"codex",idempotency_key:"loop"});
   const id=start.body.id;assert.equal(start.status,200);let row=await until("awaiting_approval");
-  assert.equal((await req("/owner/work-order/"+id+"/approve",{plan_hash:row.plan_hash},c.api.tokens.members.cursor)).status,403);
+  assert.equal((await req("/owner/work-order/"+id+"/approve",{plan_hash:row.plan_hash},c.api.tokens.members.codex)).status,403);
   assert.equal((await req("/owner/work-order/"+id+"/approve",{plan_hash:row.plan_hash})).status,200);
   row=await until("awaiting_acceptance");assert.equal(row.review,"Planner reviewed fixture evidence");
-  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["claude","cursor","claude"]);
+  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["claude","codex","claude"]);
   assert.equal((await req("/owner/work-order/"+id+"/accept",{plan_hash:row.plan_hash})).body.state,"completed");
 });
 
@@ -125,22 +123,21 @@ function claim(c,id,member){
 }
 function reply(c,id,member,text){const lease=claim(c,id,member);assert.ok(lease);return completeWorkReply(c.store,{...lease,member,text});}
 
-test("Codex plan is exact-approved and handed to specialist; coding does not fall back to Codex",t=>{
-  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Build the feature",workspace:c.workspace,worker:"claude",idempotency_key:"one"});
+test("Codex plan is exact-approved, implemented by Codex, and returned for review",t=>{
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Build the feature",workspace:c.workspace,worker:"codex",idempotency_key:"one"});
   assert.equal(start.ok,true);
-  assert.equal(startWorkOrder(c.store,{objective:"Build the feature",workspace:c.workspace,worker:"claude",idempotency_key:"one"}).duplicate,true);
+  assert.equal(startWorkOrder(c.store,{objective:"Build the feature",workspace:c.workspace,worker:"codex",idempotency_key:"one"}).duplicate,true);
   const first=claim(c,start.id,"codex");
   assert.equal(workTaskFor(c.store,first.message.id).phase,"planning");
   assert.equal(canDispatchWork(c.store,first.message.id,"codex"),true);
   completeWorkReply(c.store,{...first,member:"codex",text:"Plan A"});
   let row=readWorkOrder(c.store,start.id);assert.equal(row.state,"awaiting_approval");
   assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:"wrong"}).reason,"stale_plan");
-  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"specialist");
-  reply(c,start.id,"claude","Claude implementation guidance");
+  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"implementing");
+  reply(c,start.id,"codex","Codex implementation report");
   row=readWorkOrder(c.store,start.id);
-  assert.equal(row.state,"waiting_worker");
-  assert.equal(row.specialist_output,"Claude implementation guidance");
-  assert.match(row.stall_detail,/will not fall back to Codex\/Claude/);
+  assert.equal(row.state,"reviewing");
+  assert.equal(row.result,"Codex implementation report");
   assert.equal(c.store.verifyChain().ok,true);
 });
 
@@ -154,12 +151,12 @@ test("read-only Grok cannot be dispatched as a coding worker",t=>{
   assert.match(readWorkOrder(c.store,start.id).stall_detail,/grok-read-only/);
 });
 
-test("worker=codex after plan approval waits honestly instead of implementing",t=>{
-  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Plan only",workspace:c.workspace,worker:"codex",idempotency_key:"codex-wait"});
+test("worker=codex starts implementing after exact plan approval",t=>{
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Build it",workspace:c.workspace,worker:"codex",idempotency_key:"codex-build"});
   reply(c,start.id,"codex","A plan");
   const row=readWorkOrder(c.store,start.id);
-  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"waiting_worker");
-  assert.match(readWorkOrder(c.store,start.id).stall_detail,/coding-must-not-use-premium-worker/);
+  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"implementing");
+  assert.ok(claim(c,start.id,"codex"));
 });
 
 test("failures pause without retry storms; Cursor route produces an honest external packet",t=>{
@@ -170,22 +167,22 @@ test("failures pause without retry storms; Cursor route produces an honest exter
   assert.equal(resumeWork(c.store,a.id).state,"planning");
   reply(c,a.id,"codex","Cursor-ready plan");
   const row=readWorkOrder(c.store,a.id);approveWorkPlan(c.store,a.id,{plan_hash:row.plan_hash});
-  const done=readWorkOrder(c.store,a.id);assert.equal(done.state,"handoff_ready");assert.match(done.handoff,/Cursor-ready plan/);
+  const done=readWorkOrder(c.store,a.id);assert.equal(done.state,"waiting_worker");assert.match(done.handoff,/Cursor-ready plan/);
 });
 
-test("HTTP delegation runs Codex plan and Claude review without a coding fallback",async t=>{
+test("HTTP delegation runs Claude plan, Codex coding, and Claude review",async t=>{
   const home=mkdtempSync(join(tmpdir(),"council-work-http-")),workspace=mkdtempSync(join(tmpdir(),"council-work-http-ws-"));
   const limits={daily_ceiling:{codex:100,claude:100,grok:100},timeout_ms:{fake:3000},dispatcher:{tick_ms:20,max_member_hops:2,max_auto_replies_per_owner_turn:4}};
-  const response=(member,msg)=>msg.content.includes("planning stage")?"Exact plan":msg.content.includes("selected specialist")?"Specialist notes":"Build complete";
+  const response=(member,msg)=>msg.content.includes("planning stage")?"Exact plan":msg.content.includes("Review this Council work order")?"Review complete":"Build complete";
   const c=await startCouncil({home,port:0,useFake:true,limits,tickMs:20,scriptedReply:response,log:()=>{}});
   t.after(async()=>{await c.close();rmSync(home,{recursive:true,force:true});rmSync(workspace,{recursive:true,force:true});});
   const req=async(path,body)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+c.api.tokens.owner},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
-  const started=await req("/owner/delegate",{objective:"Build it",workspace,worker:"claude",idempotency_key:"http"});assert.equal(started.status,200);
+  const started=await req("/owner/delegate",{objective:"Build it",workspace,planner:"claude",worker:"codex",idempotency_key:"http"});assert.equal(started.status,200);
   const until=async fn=>{const end=Date.now()+5000;while(Date.now()<end){const r=fn();if(r)return r;await new Promise(r=>setTimeout(r,20));}throw Error("timeout");};
   let row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="awaiting_approval"&&r;});
   assert.equal((await req(`/owner/work-order/${row.id}/approve`,{plan_hash:row.plan_hash})).status,200);
-  row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="waiting_worker"&&r;});
-  assert.equal(row.specialist_output,"Specialist notes");
-  assert.match(row.stall_detail,/will not fall back to Codex\/Claude/);
-  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["codex","claude"]);
+  row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="awaiting_acceptance"&&r;});
+  assert.equal(row.result,"Build complete");
+  assert.equal(row.review,"Review complete");
+  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["claude","codex","claude"]);
 });

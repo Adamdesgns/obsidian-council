@@ -8,11 +8,10 @@ const ACTIVE=["planning","specialist","implementing","reviewing"];
 const TERMINAL=["completed","cancelled"];
 const phaseOf=row=>row.state==="stalled"?row.resume_state:row.state;
 
-/** Premium planners — never auto-enqueued for the implementing phase. */
-const PREMIUM_WORKERS = new Set(["codex", "claude", "gpt-5", "opus", "sonnet"]);
-// Cursor has an explicit connection check. The Grok adapter exposes read_file
-// only; never infer writable capability from a provider's name.
-const CODING_WORKERS = new Set();
+// Codex is the certified Windows coding lane. Its adapter performs a second,
+// per-run check that the effective sandbox is workspace-write before Council
+// accepts the result. Claude and Grok remain planning/review seats.
+const CODING_WORKERS = new Set(["codex"]);
 
 export function resolveImplementWorker(worker,model) {
   const selected = String(worker || "").toLowerCase();
@@ -24,9 +23,7 @@ export function resolveImplementWorker(worker,model) {
     return {ok:true,worker:"cursor",model};
   }
   if (selected === "grok") return { ok: false, wait: true, reason: "grok-read-only", selected };
-  if (PREMIUM_WORKERS.has(selected)) {
-    return { ok: false, wait: true, reason: "coding-must-not-use-premium-worker", selected };
-  }
+  if (selected === "claude") return { ok: false, wait: true, reason: "claude-review-only", selected };
   if (!CODING_WORKERS.has(selected)) {
     return { ok: false, wait: true, reason: "no-transport", selected };
   }
@@ -40,7 +37,7 @@ function enterWaitingWorker(api, row, reason, selected) {
       honest: true,
       reason,
       selected: selected || null,
-      message: `Waiting: ${reason} (will not fall back to Codex/Claude)`,
+      message: `Waiting: ${reason}`,
     }),
   });
 }
@@ -102,7 +99,7 @@ function enqueue(api,row,phase,member){
   return internalMessage(api,row,{phase,member,content});
 }
 
-export function startWorkOrder(store,{objective,workspace,worker="cursor",planner="codex",source_chamber_id=null,idempotency_key}){
+export function startWorkOrder(store,{objective,workspace,worker="codex",planner="codex",source_chamber_id=null,idempotency_key}){
   objective=typeof objective==="string"?objective.trim():"";
   const root=validWorkspace(workspace);
   if(!objective||objective.length>50000)return {ok:false,reason:"invalid_objective"};
@@ -173,24 +170,11 @@ export function approveWorkPlan(store,id,{plan_hash}){
     if(!row)return {ok:false,reason:"not_found"};
     if(row.state!=="awaiting_approval")return {ok:false,reason:"not_awaiting_approval"};
     if(row.plan_hash!==plan_hash)return {ok:false,reason:"stale_plan"};
-    if(row.worker==="cursor"){
-      const route=resolveImplementWorker(row.worker,row.worker_model);
-      if(route.ok){update(api,row,{state:"implementing"});enqueue(api,row,"implementing",row.worker);}
-      else update(api,row,{state:"handoff_ready",stall_detail:JSON.stringify({reason:route.reason,message:"Cursor packet is ready but not dispatched."})});
-    }else if(row.worker==="codex"){
-      // Codex is planner-only under cost-first: never enqueue implementing to Codex.
-      enterWaitingWorker(api,row,"coding-must-not-use-premium-worker","codex");
-    }else if(PREMIUM_WORKERS.has(String(row.worker).toLowerCase())){
-      // Premium specialist (e.g. claude) still runs the specialist phase; coding
-      // ownership is decided after specialist replies (no Codex fallback).
-      update(api,row,{state:"specialist"});enqueue(api,row,"specialist",row.worker);
+    const routed=resolveImplementWorker(row.worker,row.worker_model);
+    if(!routed.ok){
+      enterWaitingWorker(api,row,routed.reason,routed.selected);
     }else{
-      const routed=resolveImplementWorker(row.worker,row.worker_model);
-      if(!routed.ok){
-        enterWaitingWorker(api,row,routed.reason,routed.selected);
-      }else{
-        update(api,row,{state:"implementing"});enqueue(api,row,"implementing",routed.worker);
-      }
+      update(api,row,{state:"implementing"});enqueue(api,row,"implementing",routed.worker);
     }
     api.setRef("work_orders",id,{state:row.state,worker:row.worker,plan_hash});
     return {ok:true,state:row.state};

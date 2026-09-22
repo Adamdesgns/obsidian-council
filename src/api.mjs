@@ -15,7 +15,6 @@ import { loadLimits } from "./adapters/spawn.mjs";
 import { startDeliberation, readDeliberation, resumeStalled, decide, abandon, haltDeliberations, taskFor } from "./deliberation.mjs";
 import { createUsageService } from "./usage/service.mjs";
 import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders,acceptWork,reviseWork} from "./work-orders.mjs";
-import {connection as cursorConnection} from "./adapters/cursor.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
 
@@ -334,8 +333,7 @@ export function createApi(opts = {}) {
     }
     if(req.method==="GET"&&path==="/owner/work-orders"){
       const rows=store.prepare("SELECT id FROM work_orders ORDER BY created DESC LIMIT 100").all();
-      const c=cursorConnection();
-      return sendJson(res,200,{work_orders:rows.map(r=>readWorkOrder(store,r.id)),cursor:{configured:c.ok,model:c.model||null,reason:c.reason||null}});
+      return sendJson(res,200,{work_orders:rows.map(r=>readWorkOrder(store,r.id)),builder:{configured:true,id:"codex",label:"Codex",verification:"workspace-write checked for every coding run"}});
     }
     if(req.method==="POST"&&path==="/owner/delegate"){
       if(existsSync(join(home,"HALT")))return sendJson(res,409,{error:"halted"});
