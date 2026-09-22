@@ -1,7 +1,7 @@
 // src/adapters/spawn.mjs — the one place a member process is started.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, rmSync } from "node:fs";
+import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import * as claude from "./claude.mjs";
@@ -244,6 +244,15 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
       result.buildPolicy = buildCheck.policy;
     } else {
       result.buildPolicy = buildCheck.policy;
+    }
+  }
+
+  if (member === "codex" && role === "build") {
+    const root = resolve(cwd) + sep;
+    for (const candidate of [envExtra.USERPROFILE, envExtra.TEMP]) {
+      const target = candidate && resolve(candidate);
+      if (!target || !target.startsWith(root) || !/^\.council-codex-(home|temp)$/.test(target.slice(root.length))) continue;
+      try { rmSync(target, { recursive: true, force: true }); } catch { /* reported by workspace status if cleanup fails */ }
     }
   }
 

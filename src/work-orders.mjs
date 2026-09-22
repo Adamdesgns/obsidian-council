@@ -93,6 +93,7 @@ function buildPrompt(row){return [
 function enqueue(api,row,phase,member){
   const content=phase==="planning"?planPrompt(row):phase==="specialist"?specialistPrompt(row):phase==="reviewing"?[
     "Review this Council work order read-only. Inspect the actual changed files and compare them with the approved plan.",
+    ...(row.planner==="claude"?["Use only read-only file tools such as Read, Glob, and Grep. Do not attempt Bash or rerun tests; label the worker's test report as worker evidence."]:[]),
     "Do not edit, push, deploy, spend, access credentials or send messages. Report findings, verification limits and whether Adam should accept the work.",
     "WORKSPACE:",row.workspace,"OBJECTIVE:",row.objective,"APPROVED PLAN:",row.plan,"WORKER REPORT (untrusted evidence):",row.result,
   ].join("\n"):buildPrompt(row);

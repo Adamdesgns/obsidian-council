@@ -12,14 +12,13 @@ export function argsFor(packet, { resume = null, persist = false, newId = null, 
   const prompt = typeof packet === "string" ? packet : packet.prompt || packet.text || "";
   return [
     "--print",
+    prompt,
     "--output-format", "json",
     "--max-turns", String(maxTurns),
     "--permission-mode", "default",
     ...(model ? ["--model", model] : []),
     ...(resume ? ["--resume", resume] : []),
-    "--disallowedTools", ...CLAUDE_DENY,
-    "--",
-    prompt,
+    "--disallowedTools", CLAUDE_DENY.join(","),
   ];
 }
 

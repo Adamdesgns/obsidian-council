@@ -13,11 +13,13 @@ Council completed the intended local Windows lifecycle:
 5. Codex reviewed the actual files and independently reran the test in a read-only elevated Windows sandbox.
 6. The work order reached `awaiting_acceptance`, then the owner API accepted it and recorded `completed`.
 
+The installed Claude CLI is also logged in. `live-proof-claude-planner.json` records the second real route with Claude planning/reviewing and Codex coding.
+
 `live-proof.json` contains the sanitized run summary. It contains no owner token or provider credential.
 
 ## Automated and visible checks
 
-- `npm test`: 120 passed, 0 failed.
+- `npm test`: 121 passed, 0 failed.
 - The browser displayed only **Codex coding lane** for implementation.
 - The route displayed `codex plan → your approval → Codex coding → codex review → your acceptance`.
 - Clicking **Approve plan and start coding** moved the simulated browser fixture through coding and planner review to **Accept reviewed work**.
@@ -27,3 +29,4 @@ Council completed the intended local Windows lifecycle:
 
 - No push, deploy, purchase, credential use, or external communication was performed by a work order.
 - The proof workspace is intentionally disposable and untracked, so the live reviewer recorded that it could verify behavior but not a tracked before/after change set.
+- Normal Codex builds now remove their two workspace-local runtime folders after exit; an automated regression covers that cleanup.

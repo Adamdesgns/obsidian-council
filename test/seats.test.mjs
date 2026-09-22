@@ -13,6 +13,9 @@ test("seat resolves adapter/account; model can be passed explicitly; owner is ne
   assert.equal(seatOf("fable").adapter,"claude");
   assert.equal(seatOf("fable").account,seatOf("claude").account);
   assert.ok(argsFor("q",{model:"test-model"}).includes("test-model"));
+  assert.equal(argsFor("read only plan")[1],"read only plan");
+  assert.equal(argsFor("read only plan").includes("--"),false);
+  assert.match(argsFor("read only plan")[argsFor("read only plan").indexOf("--disallowedTools")+1],/^Bash,Edit,/);
   assert.deepEqual(parseAddressChain("@owner @fable @codex"),["fable","codex"]);
   assert.throws(()=>validateSeats([{id:"owner",adapter:"claude",account:"claude",role:"deliberator"}]));
 });

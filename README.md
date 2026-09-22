@@ -31,7 +31,7 @@ Council prompts prohibit pushing, merging, deploying, spending, contacting anyon
 
 - Windows and Node 24 or newer.
 - The installed Codex CLI logged in with ChatGPT. This PC was verified on 2026-09-22.
-- Claude Code logged in if Claude is selected as planner.
+- Claude Code logged in if Claude is selected as planner. This PC was verified on 2026-09-22.
 
 ## Commands
 
@@ -45,8 +45,9 @@ npm run preview:fake
 
 ## Verification
 
-- 120 automated tests pass.
+- 121 automated tests pass.
 - A real Windows proof completed `Codex plan → owner approval → Codex coding → Codex read-only review → owner acceptance`.
+- A second real Windows proof completed the same lifecycle with Claude as planner/reviewer and Codex as coder.
 - The build changed a disposable module from `1` to `2`, ran its test successfully, and recorded a verified `workspace-write` sandbox policy.
 - The reviewer independently read the files and reran the test in a read-only elevated Windows sandbox.
 

@@ -1,0 +1,41 @@
+{
+  "provedAt": "2026-09-22T17:19:54.251Z",
+  "route": [
+    "claude-plan",
+    "owner-approval",
+    "codex-build",
+    "claude-review",
+    "owner-acceptance"
+  ],
+  "stateBeforeAcceptance": "awaiting_acceptance",
+  "source": "export const answer = 2;\n",
+  "result": "Changed only `answer.mjs` line 1 to `export const answer = 2;`, preserving the trailing newline.\n\n- `npm test`: exit 0, **1 passed, 0 failed**.\n- `git diff -- answer.mjs`: empty; it matches HEAD.\n- Pre-existing modified files remain unchanged.\n- Two new untracked directories appeared: `.council-codex-home/` and `.council-codex-temp/`. I did not explicitly create or modify them.\n\nNo commit, push, merge, or deployment performed.",
+  "review": "## Read-only review — Council work order (proof-workspace)\n\n**Verdict: accept.** The product change is exactly what the plan approved, and nothing else in the workspace moved.\n\n### What I verified myself (file reads only)\n\n| Check | Result |\n|---|---|\n| `answer.mjs:1` | `export const answer = 2;` + trailing newline, single line, no comments or extra exports ✅ |\n| `answer.test.mjs` | Untouched — still 5 lines, asserts `answer === 2` ✅ |\n| `package.json` | Untouched — `\"test\": \"node --test\"`, no deps added ✅ |\n| Workspace contents | Only the three original files + the two sandbox dirs. No stray files, no `node_modules`, no `.gatattributes`/lockfile added ✅ |\n\nTwo independent cross-checks, without running anything:\n\n- **The git snapshot taken at the start of this session does not list `proof-workspace/answer.mjs` as modified** — only `README.md`, `evidence/.../REPORT.md`, `scripts/prove-windows-codex.mjs`, `src/adapters/claude.mjs`, `src/work-orders.mjs`, `test/seats.test.mjs`. That independently confirms the worker's `git diff -- answer.mjs` claim: the file now matches HEAD, and the pre-existing modified set is unchanged.\n- Sorting the repo's `.mjs` files by last-modified time puts exactly those four already-modified files at the tail, with nothing else after them — consistent with the worker not having touched any product file outside the workspace.\n\n### The two untracked directories — explained, not suspicious\n\nThe worker is right that it didn't create them. `src/adapters/codex.mjs:66-69` deliberately points `HOME`/`USERPROFILE`/`TEMP`/`TMP` at `.council-codex-home` and `.council-codex-temp` inside the workspace for the *build* role (AppData is unwritable under the sandbox user). Their contents are innocuous byproducts — one PowerShell startup-profile file and Node's compile cache — and there's nothing credential-shaped in either. They're actually mild corroboration that a Node/npm process really ran in that directory.\n\nOne real gap worth fixing separately: **only `scripts/prove-windows-codex.mjs:49-50` deletes them, and they are not in `.gitignore`.** Any work order dispatched outside that proof script leaves them behind, permanently dirtying `git status` and making an accidental `git add -A` commit the sandbox junk. Add them to `.gitignore` (or clean up in the adapter). Not a reason to reject this work order.\n\nMinor, also not blocking: the committed reviewer note in `live-proof.json:13` and `REPORT.md:31` says the proof workspace is \"untracked\" with \"no tracked baseline available.\" That was probably true when that run happened, but it's stale now — the workspace is tracked at HEAD, which is exactly why the scope claim *is* verifiable today. Worth correcting when `REPORT.md` is next touched.\n\n### Verification limits (be clear on these)\n\n- **I did not run the tests.** \"exit 0, 1 passed, 0 failed\" is **worker evidence only** — no Bash was permitted here, so it is unconfirmed by me. The test file and the source are mutually consistent, so a pass is the expected outcome, but that's reasoning, not a run.\n- **No live `git` commands.** My \"matches HEAD\" and \"nothing else changed\" conclusions rest on the session-start status snapshot plus file mtimes, not a fresh `git diff`/`git status`.\n- **Line endings unverified.** I can see a trailing newline exists; I can't see CRLF vs LF from a file read. `.gitattributes` doesn't cover `evidence/`, so if the byte-for-byte match to HEAD matters, that's the one thing left to confirm — and the clean git snapshot already implies it's fine.\n- **I can't prove the four repo-level modified files predate this run** — only that they match the set the plan called pre-existing.\n\n**Recommendation:** accept and close the work order. Don't commit `.council-codex-home/` or `.council-codex-temp/`; open a small follow-up to gitignore them.",
+  "runs": [
+    {
+      "member": "claude",
+      "exit": 0,
+      "role": "review",
+      "workspaceWrite": false,
+      "refused": null,
+      "timedOut": false
+    },
+    {
+      "member": "codex",
+      "exit": 0,
+      "role": "build",
+      "workspaceWrite": true,
+      "refused": null,
+      "timedOut": false
+    },
+    {
+      "member": "claude",
+      "exit": 0,
+      "role": "review",
+      "workspaceWrite": false,
+      "refused": null,
+      "timedOut": false
+    }
+  ],
+  "finalState": "completed"
+}

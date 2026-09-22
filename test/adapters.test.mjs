@@ -1,7 +1,7 @@
 // test/adapters.test.mjs — P2-4 acceptance (fake members only; no live Codex Build)
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -131,6 +131,22 @@ describe("P2-4 adapters and spawn", () => {
       assert.equal(Object.keys(codex.envFor("review", cwd)).length, 0);
     } finally {
       try { rmSync(cwd, { recursive: true, force: true }); } catch { /* */ }
+    }
+  });
+
+  it("Codex Build removes its workspace-local runtime folders after exit", async () => {
+    const home = tempHome(), cwd = mkdtempSync(join(tmpdir(), "council-build-cleanup-"));
+    const store = openStore({ home });
+    try {
+      await spawnMember(store, "codex", "fixture build", {
+        fakePath: FAKE, cwd, role: "build", skipBuildVerify: true,
+        limits: { daily_ceiling: { codex: 100 }, timeout_ms: { codex: 5000 } },
+      });
+      assert.equal(existsSync(join(cwd, ".council-codex-home")), false);
+      assert.equal(existsSync(join(cwd, ".council-codex-temp")), false);
+    } finally {
+      cleanup(home, store);
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 
