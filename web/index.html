@@ -343,8 +343,9 @@ async function refreshWork(){
       option.textContent=worker?worker.label+" "+worker.mode+(worker.ready?"":" — setup needed"):option.textContent;
     }
     if(select.selectedOptions[0]?.disabled)select.value="codex";
+    const why={"cursor-workspace-trust-required":"workspace trust approval needed","cursor-not-enabled":"CLI setup needed","cursor-model-required":"model selection needed","cursor-cli-required":"CLI install needed","cursor-entrypoint-required":"CLI entrypoint needed"};
     document.getElementById("workerConnection").textContent=workers.length
-      ?workers.map(w=>w.label+": "+(w.ready?w.mode+" ready":w.reason||"setup needed")).join(" · ")
+      ?workers.map(w=>w.label+": "+(w.ready?w.mode+" ready":why[w.reason]||w.reason||"setup needed")).join(" · ")
       :"Checking coding lanes…";
     if(!workRows.some(r=>r.id===selectedWork))selectedWork=workRows[0]?.id||"";
     const sel=document.getElementById("workSelect");sel.innerHTML="";

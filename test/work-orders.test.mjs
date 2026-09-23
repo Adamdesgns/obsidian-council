@@ -136,6 +136,31 @@ test("fake Grok authors a checked patch and returns to Codex review",async t=>{
   assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["codex","grok","codex"]);
 });
 
+test("fake Cursor authors a checked patch and returns to Claude review",async t=>{
+  const home=mkdtempSync(join(tmpdir(),"council-cursor-loop-"));
+  const workspace=mkdtempSync(join(tmpdir(),"council-cursor-ws-"));
+  writeFileSync(join(workspace,"answer.mjs"),"export const answer = 1;\n");
+  const keys=["COUNCIL_CURSOR_ENABLED","COUNCIL_CURSOR_EXE","COUNCIL_CURSOR_ENTRYPOINT","COUNCIL_CURSOR_MODEL"],before=keys.map(k=>process.env[k]);
+  process.env.COUNCIL_CURSOR_ENABLED="1";process.env.COUNCIL_CURSOR_EXE=process.execPath;
+  delete process.env.COUNCIL_CURSOR_ENTRYPOINT;process.env.COUNCIL_CURSOR_MODEL="fixture-composer";
+  const diff=["diff --git a/answer.mjs b/answer.mjs","--- a/answer.mjs","+++ b/answer.mjs",
+    "@@ -1 +1 @@","-export const answer = 1;","+export const answer = 2;","END PATCH"].join("\n");
+  const c=await startCouncil({home,port:0,useFake:true,tickMs:20,log:()=>{},
+    limits:{daily_ceiling:{codex:100,claude:100,grok:100,cursor:100},timeout_ms:{fake:3000}},
+    scriptedReply:(member,msg)=>member==="cursor"?diff:msg.content.includes("planning stage")?"Exact plan":"Review confirms answer is 2."});
+  t.after(async()=>{await c.close();keys.forEach((k,i)=>before[i]===undefined?delete process.env[k]:process.env[k]=before[i]);
+    for(const path of [home,workspace])rmSync(path,{recursive:true,force:true});});
+  const req=async(path,body)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+c.api.tokens.owner},body:body===undefined?undefined:JSON.stringify(body)});return r.json();};
+  const started=await req("/owner/delegate",{objective:"Change answer to 2",workspace,planner:"claude",worker:"cursor",idempotency_key:"cursor-loop"});
+  const until=async state=>{const end=Date.now()+5000;while(Date.now()<end){const row=readWorkOrder(c.api.store,started.id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
+  let row=await until("awaiting_approval");
+  assert.equal((await req("/owner/work-order/"+row.id+"/approve",{plan_hash:row.plan_hash})).state,"implementing");
+  row=await until("awaiting_acceptance");
+  assert.match(row.result,/checked text patch/);
+  assert.equal(readFileSync(join(workspace,"answer.mjs"),"utf8").replace(/\r\n/g,"\n"),"export const answer = 2;\n");
+  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["claude","cursor","claude"]);
+});
+
 function fixture(t){
   // Each test owns both its database and writable target.
   const home=mkdtempSync(join(tmpdir(),"council-work-home-")),workspace=mkdtempSync(join(tmpdir(),"council-workspace-"));

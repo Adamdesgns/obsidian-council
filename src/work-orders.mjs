@@ -28,6 +28,7 @@ export function resolveImplementWorker(worker,model) {
   if (selected === "cursor") {
     const c=cursorConnection(process.env,{patchOnly:true});
     if(!c.ok)return {...c,wait:true,selected};
+    if(process.env.COUNCIL_TEST_ONLY!=="1"&&process.env.COUNCIL_CURSOR_TRUST_APPROVED!=="1")return {ok:false,wait:true,reason:"cursor-workspace-trust-required",selected};
     if(model!==c.model)return {ok:false,wait:true,reason:"cursor-model-changed",selected};
     return {ok:true,worker:"cursor",model,mode:"checked-patch"};
   }
@@ -145,7 +146,7 @@ export function startWorkOrder(store,{objective,workspace,worker="codex",planner
 }
 
 export function workTaskFor(store,messageId){
-  return store.prepare(`SELECT wm.*,w.state,w.resume_state,w.workspace,w.worker,w.worker_model FROM work_order_messages wm
+  return store.prepare(`SELECT wm.*,w.state,w.resume_state,w.workspace,w.worker,w.worker_model,w.plan_hash FROM work_order_messages wm
     JOIN work_orders w ON w.id=wm.work_order_id WHERE wm.message_id=?`).get(messageId)||null;
 }
 

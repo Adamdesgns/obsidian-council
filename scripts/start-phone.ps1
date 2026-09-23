@@ -35,6 +35,10 @@ $env:CODEX_LOCAL_USAGE_READER = "1"
 $env:CLAUDE_LOCAL_USAGE_READER = "1"
 $env:COUNCIL_GROK_PATCH_ENABLED = "1"
 $env:COUNCIL_GROK_MODEL = "grok-4.7-build-fast"
+$env:COUNCIL_CURSOR_ENABLED = "1"
+$env:COUNCIL_CURSOR_EXE = Join-Path $env:LOCALAPPDATA "Programs\ObsidianCouncilCursorCLI\node.exe"
+$env:COUNCIL_CURSOR_ENTRYPOINT = Join-Path $env:LOCALAPPDATA "Programs\ObsidianCouncilCursorCLI\index.js"
+$env:COUNCIL_CURSOR_MODEL = "composer-2.5"
 $env:COUNCIL_ALLOWED_HOSTS = $dnsName
 $env:COUNCIL_PUBLIC_URL = "https://$dnsName"
 Set-Location -LiteralPath $repo

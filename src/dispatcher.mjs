@@ -302,6 +302,7 @@ export function createDispatcher(opts = {}) {
       persist: !engineTask && !resume,
       newId: member === "grok" && !resume ? crypto.randomUUID() : null,
       role: workTask?.phase === "implementing" ? "build" : "review",
+      trustApproved: member === "cursor" && workTask?.phase === "implementing" && !!workTask.plan_hash && process.env.COUNCIL_CURSOR_TRUST_APPROVED === "1",
       model: workTask?.worker_model,
       maxTurns: workTask ? 12 : undefined,
       memberToken: managedTask ? null : tokens[member],

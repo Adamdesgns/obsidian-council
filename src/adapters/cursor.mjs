@@ -17,10 +17,11 @@ export function connection(env=process.env,{patchOnly=false}={}){
   if(entrypoint){try{if(!isAbsolute(entrypoint)||! /\.(?:m?js)$/i.test(entrypoint)||!statSync(entrypoint).isFile())return {ok:false,reason:"cursor-entrypoint-required",model};}catch{return {ok:false,reason:"cursor-entrypoint-required",model};}}
   return {ok:true,exe,model,prefix:entrypoint?[entrypoint]:[],patchOnly};
 }
-export function argsFor(packet,{cwd,model,role="review"}={}){
+export function argsFor(packet,{cwd,model,role="review",trustApproved=false}={}){
   if(!model)throw Error("Cursor requires an explicitly selected model");
   const prompt=typeof packet==="string"?packet:packet.prompt||packet.text||"";
   return ["--print","--output-format","json","--sandbox","enabled","--workspace",cwd,"--model",model,
+    ...(role==="build"&&trustApproved?["--trust"]:[]),
     "--mode","ask",prompt];
 }
 function parsed(result){try{return JSON.parse(result?.stdout||"");}catch{return null;}}

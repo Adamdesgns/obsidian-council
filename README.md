@@ -39,7 +39,7 @@ Council prompts prohibit pushing, merging, deploying, spending, contacting anyon
 - The installed Codex CLI logged in with ChatGPT. This PC was verified on 2026-09-22.
 - Claude Code logged in if Claude is selected as planner. This PC was verified on 2026-09-22.
 - Grok Build CLI signed in if Grok is selected for coding. The launcher pins `grok-4.7-build-fast`.
-- Cursor CLI signed in and `COUNCIL_CURSOR_ENABLED=1`, `COUNCIL_CURSOR_EXE`, `COUNCIL_CURSOR_ENTRYPOINT`, and `COUNCIL_CURSOR_MODEL` set to the verified local CLI paths and model if Cursor is selected. Council shows setup needed until these are set.
+- Cursor CLI signed in with its stable local runtime at `%LOCALAPPDATA%\Programs\ObsidianCouncilCursorCLI`. Both launchers pin the verified `composer-2.5` model. Cursor's workspace-trust gate remains closed until Adam authorizes `COUNCIL_CURSOR_TRUST_APPROVED=1`; this only affects an exact approved coding work order, which stays in read-only Ask mode and returns a checked patch.
 
 ## Commands
 
@@ -53,12 +53,12 @@ npm run preview:fake
 
 ## Verification
 
-- 134 automated tests pass in this branch.
+- 136 automated tests pass in this branch.
 - A real Windows proof completed `Codex plan → owner approval → Codex coding → Codex read-only review → owner acceptance`.
 - A second real Windows proof completed the same lifecycle with Claude as planner/reviewer and Codex as coder.
 - The build changed a disposable module from `1` to `2`, ran its test successfully, and recorded a verified `workspace-write` sandbox policy.
 - The reviewer independently read the files and reran the test in a read-only elevated Windows sandbox.
-- Grok's CLI authored a patch in a disposable folder and Council's checked patch applier applied it. The full work-order lifecycle passed fake-provider tests. Cursor's local CLI is installed but was not signed in during this verification; its live path remains unverified.
+- Grok's CLI authored a patch in a disposable folder and Council's checked patch applier applied it. The full Grok and Cursor work-order lifecycles passed fake-provider tests. Cursor's local CLI is signed in and offers the pinned `composer-2.5` model, but a live patch run still needs workspace trust approval.
 
 Evidence: `evidence/2026-09-22-windows-codex/live-proof.json`.
 

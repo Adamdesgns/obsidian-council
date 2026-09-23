@@ -20,6 +20,14 @@ test("Cursor command keeps sandbox and permissions enabled and pins the model",(
   assert.equal(args[args.indexOf("--model")+1],"fixture");
   for(const flag of ["--force","--yolo","--approve-mcps","--trust"])assert.equal(args.includes(flag),false);
 });
+test("Cursor workspace trust is used only for an explicitly approved build",()=>{
+  const build=argsFor("patch",{cwd:"C:/isolated",model:"fixture",role:"build",trustApproved:true});
+  const review=argsFor("review",{cwd:"C:/isolated",model:"fixture",role:"review",trustApproved:true});
+  assert.equal(build.includes("--trust"),true);
+  assert.equal(review.includes("--trust"),false);
+  assert.equal(build[build.indexOf("--mode")+1],"ask");
+  assert.equal(build.includes("--force"),false);
+});
 test("Cursor reports require structured success, not arbitrary stdout",()=>{
   assert.equal(finalText({stdout:'{"type":"result","is_error":true,"result":"oops"}'}),"");
   assert.equal(finalText({stdout:"probably done"}),"");

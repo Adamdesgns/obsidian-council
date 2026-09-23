@@ -136,6 +136,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
       newId: opts.newId,
       cwd,
       role,
+      trustApproved: opts.trustApproved === true,
       maxTurns: opts.maxTurns,
     });
   }
