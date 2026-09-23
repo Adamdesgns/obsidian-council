@@ -104,6 +104,14 @@ describe("P2-4 adapters and spawn", () => {
     assert.ok(!withNew.includes("--resume"));
   });
 
+  it("Grok patch authoring denies write and external tools", () => {
+    const args = grok.argsFor("author patch", {role:"build",model:"fixture-model"});
+    const denied = args.flatMap((arg,i)=>arg==="--deny"?[args[i+1]]:[]);
+    assert.deepEqual(denied,["Bash(*)","Edit(*)","MCPTool(*:*)","WebFetch(*)","WebSearch(*)"]);
+    assert.equal(args[args.indexOf("--tools")+1],"read_file");
+    assert.equal(args[args.indexOf("--permission-mode")+1],"dontAsk");
+  });
+
   it("Codex Build args include A3b flags; review stays read-only", () => {
     const build = codex.argsFor("build me", { role: "build", cwd: "C:\\ws" });
     assert.ok(build.includes("workspace-write"));

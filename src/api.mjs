@@ -14,7 +14,7 @@ import { contentHash } from "./sanctions.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
 import { startDeliberation, readDeliberation, resumeStalled, decide, abandon, haltDeliberations, taskFor } from "./deliberation.mjs";
 import { createUsageService } from "./usage/service.mjs";
-import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders,acceptWork,reviseWork} from "./work-orders.mjs";
+import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders,acceptWork,reviseWork,resolveImplementWorker,grokPatchConnection} from "./work-orders.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
 const LOOPBACK_NAMES = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -106,7 +106,7 @@ export function createApi(opts = {}) {
   const outbox = opts.outbox || createOutbox(store, { leaseMs: config.lease_ms });
   const tokens = opts.tokens || loadOrCreateTokens(home);
   // Fixture readings are opt-in (tests, preview-fake). Default: honest "unavailable".
-  const usageService = opts.usageService || createUsageService({ fixtureMode: opts.usageFixture === true });
+  const usageService = opts.usageService || createUsageService({ fixtureMode: opts.usageFixture === true, manualPath:join(home,"manual-usage.json") });
   const sseClients = new Set();
   let halt = existsSync(join(home, "HALT"));
 
@@ -358,9 +358,19 @@ export function createApi(opts = {}) {
       // Read-only. ?refresh=1 asks for a re-read; the service's throttle decides.
       return sendJson(res, 200, await usageService.read({ refresh: url.searchParams.get("refresh") === "1" }));
     }
+    if (req.method === "POST" && path === "/owner/usage/manual") {
+      const body=await readBody(req);
+      const result=usageService.setManual?.(body||{})||{ok:false,reason:"manual-reading-disabled"};
+      return sendJson(res,result.ok?200:400,{...result,error:result.ok?undefined:result.reason});
+    }
     if(req.method==="GET"&&path==="/owner/work-orders"){
       const rows=store.prepare("SELECT id FROM work_orders ORDER BY created DESC LIMIT 100").all();
-      return sendJson(res,200,{work_orders:rows.map(r=>readWorkOrder(store,r.id)),builder:{configured:true,id:"codex",label:"Codex",verification:"workspace-write checked for every coding run"}});
+      const grok=grokPatchConnection(),cursor=resolveImplementWorker("cursor",process.env.COUNCIL_CURSOR_MODEL||null);
+      return sendJson(res,200,{work_orders:rows.map(r=>readWorkOrder(store,r.id)),builder:{configured:true,id:"codex",label:"Codex",verification:"workspace-write checked for every coding run"},builders:[
+        {id:"codex",ready:true,label:"Codex",mode:"sandboxed coding"},
+        {id:"grok",ready:grok.ok,label:"Grok",mode:"checked patch",reason:grok.reason||null},
+        {id:"cursor",ready:cursor.ok,label:"Cursor",mode:"checked patch",reason:cursor.reason||null},
+      ]});
     }
     if(req.method==="POST"&&path==="/owner/delegate"){
       if(existsSync(join(home,"HALT")))return sendJson(res,409,{error:"halted"});

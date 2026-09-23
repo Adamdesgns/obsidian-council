@@ -17,6 +17,7 @@ import { parseAddressChain, routeOwnerSay } from "./routing.mjs";
 import { seatOf } from "./seats.mjs";
 import { taskFor, canDispatch, completeReply, stall, haltDeliberations } from "./deliberation.mjs";
 import { workTaskFor, canDispatchWork, completeWorkReply, stallWork, haltWorkOrders, recoverUnsupportedWork } from "./work-orders.mjs";
+import {applyWorkerPatch} from "./patch-worker.mjs";
 
 const ADAPTERS = { claude: claudeAd, codex: codexAd, grok: grokAd, cursor:cursorAd };
 
@@ -450,6 +451,23 @@ export function createDispatcher(opts = {}) {
     }
     if (workTask) {
       if (isHalted()) haltWorkOrders(store);
+      else if (workTask.phase==="implementing" && (member==="cursor" || member==="grok")) {
+        if (!canDispatchWork(store,message.id,member)) {
+          setPresence(member,"idle");
+          return;
+        }
+        const applied=applyWorkerPatch(cwd,text);
+        if (!applied.ok) {
+          stallWork(store,{message,delivery,gen,member,reason:"checked_patch_failed: "+applied.reason,result});
+          setPresence(member,"idle");
+          return;
+        }
+        const workerReport=text.split(/^END PATCH\s*$/m).slice(1).join("").trim().slice(0,6000);
+        text="Council applied a checked text patch authored by "+member+".\nFiles and SHA-256:\n"+
+          Object.entries(applied.hashes).map(([path,hash])=>path+" "+hash).join("\n")+
+          "\nTests were not run by the patch worker.\nWorker report (untrusted):\n"+workerReport;
+        completeWorkReply(store,{message,delivery,gen,member,text});
+      }
       else completeWorkReply(store, {message, delivery, gen, member, text});
       setPresence(member, "idle");
       return;

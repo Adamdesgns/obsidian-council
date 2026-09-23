@@ -1,5 +1,6 @@
 import {existsSync, statSync} from "node:fs";
-import {isAbsolute, resolve} from "node:path";
+import {isAbsolute, resolve, join} from "node:path";
+import {homedir} from "node:os";
 import {contentHash} from "./sanctions.mjs";
 import {seatOf} from "./seats.mjs";
 import {connection as cursorConnection} from "./adapters/cursor.mjs";
@@ -8,21 +9,34 @@ const ACTIVE=["planning","specialist","implementing","reviewing"];
 const TERMINAL=["completed","cancelled"];
 const phaseOf=row=>row.state==="stalled"?row.resume_state:row.state;
 
-// Codex is the certified Windows coding lane. Its adapter performs a second,
-// per-run check that the effective sandbox is workspace-write before Council
-// accepts the result. Claude and Grok remain planning/review seats.
+// Codex writes in its certified sandbox. Cursor and Grok can author a patch
+// with read-only tools; Council validates and applies it in the worktree.
 const CODING_WORKERS = new Set(["codex"]);
+
+export function grokPatchConnection(env=process.env) {
+  if (env.COUNCIL_GROK_PATCH_ENABLED!=="1") return {ok:false,reason:"grok-patch-not-enabled"};
+  const model=env.COUNCIL_GROK_MODEL||"";
+  if (!model || model==="auto") return {ok:false,reason:"grok-model-required"};
+  const exe=join(env.USERPROFILE||homedir(),".grok","bin","grok.exe");
+  if (!existsSync(exe)) return {ok:false,reason:"grok-cli-required"};
+  return {ok:true,worker:"grok",model,mode:"checked-patch"};
+}
 
 export function resolveImplementWorker(worker,model) {
   const selected = String(worker || "").toLowerCase();
   if (!selected) return { ok: false, wait: true, reason: "no-worker-selected" };
   if (selected === "cursor") {
-    const c=cursorConnection();
+    const c=cursorConnection(process.env,{patchOnly:true});
     if(!c.ok)return {...c,wait:true,selected};
     if(model!==c.model)return {ok:false,wait:true,reason:"cursor-model-changed",selected};
-    return {ok:true,worker:"cursor",model};
+    return {ok:true,worker:"cursor",model,mode:"checked-patch"};
   }
-  if (selected === "grok") return { ok: false, wait: true, reason: "grok-read-only", selected };
+  if (selected === "grok") {
+    const c=grokPatchConnection();
+    if(!c.ok)return {...c,wait:true,selected};
+    if(model!==c.model)return {ok:false,wait:true,reason:"grok-model-changed",selected};
+    return c;
+  }
   if (selected === "claude") return { ok: false, wait: true, reason: "claude-review-only", selected };
   if (!CODING_WORKERS.has(selected)) {
     return { ok: false, wait: true, reason: "no-transport", selected };
@@ -84,7 +98,12 @@ function specialistPrompt(row){return [
 
 function buildPrompt(row){return [
   "Execute this approved Council work order in the current workspace.",
-  "Implement the plan, run appropriate local tests, and report the exact files changed and results.",
+  ...(row.worker==="codex"
+    ? ["Implement the plan, run appropriate local tests, and report the exact files changed and results."]
+    : ["Use read-only file tools to inspect the workspace. Do not edit files or run shell commands.",
+       "Author the implementation as a unified diff with diff --git headers, text hunks, and relative paths.",
+       "Return the diff followed by a line reading END PATCH, then a short report. Council checks and applies the patch.",
+       "Do not claim tests ran. Keep the patch under 128 KiB and avoid renames, deletions, symlinks, binary files or mode changes."]),
   "Do not push, merge, deploy, spend, contact anyone, or use credentials. Stop and report if blocked.",
   "OBJECTIVE:",row.objective,"APPROVED PLAN:",row.plan,
   ...(row.specialist_output?["SPECIALIST HANDOFF:",row.specialist_output]:[]),
@@ -115,7 +134,7 @@ export function startWorkOrder(store,{objective,workspace,worker="codex",planner
   return store.commit("work_order_started","owner",api=>{
     const id=api.uuid(),chamber=`work-${id}`,now=api.nowIso();
     const context=source_chamber_id?api.prepare("SELECT sender,content FROM messages WHERE chamber_id=? ORDER BY created DESC,rowid DESC LIMIT 30").all(source_chamber_id).reverse().map(m=>m.sender+": "+m.content).join("\n").slice(-16000):null;
-    const model=worker==="cursor"?(cursorConnection().model||null):null;
+    const model=worker==="cursor"?(cursorConnection(process.env,{patchOnly:true}).model||null):worker==="grok"?(grokPatchConnection().model||null):null;
     api.prepare(`INSERT INTO work_orders(id,request_key,request_hash,chamber_id,source_chamber_id,objective,workspace,planner,worker,state,created,updated,worker_model,context)
       VALUES(?,?,?,?,?,?,?,?,?,'planning',?,?,?,?)`).run(id,idempotency_key,requestHash,chamber,source_chamber_id,objective,root,planner,worker,now,now,model,context);
     const row=api.prepare("SELECT * FROM work_orders WHERE id=?").get(id);
@@ -239,7 +258,7 @@ export function reviseWork(store,id,{feedback,idempotency_key}){
     const revision=row.revision+1;
     const context=[row.context||"","PREVIOUS PLAN:",row.plan||"","WORKER REPORT:",row.result||"","REVIEW:",row.review||"","OWNER FEEDBACK:",feedback].join("\n").slice(-32000);
     api.prepare("INSERT INTO work_order_revisions VALUES(?,?,?,?)").run(id,idempotency_key,hash,revision);
-    update(api,row,{revision,context,plan:null,plan_hash:null,result:null,review:null,specialist_output:null,stall_detail:null,resume_state:null,state:"planning",worker_model:row.worker==="cursor"?(cursorConnection().model||null):null});
+    update(api,row,{revision,context,plan:null,plan_hash:null,result:null,review:null,specialist_output:null,stall_detail:null,resume_state:null,state:"planning",worker_model:row.worker==="cursor"?(cursorConnection(process.env,{patchOnly:true}).model||null):row.worker==="grok"?(grokPatchConnection().model||null):null});
     enqueue(api,row,"planning",row.planner);api.setRef("work_orders",id,{revision,state:"planning"});return {ok:true,state:"planning"};
   }).result;
 }

@@ -4,16 +4,23 @@ export function describe() {
   return { id: "grok", kind: "cli" };
 }
 
-export function argsFor(packet, { resume = null, persist = false, newId = null, cwd = process.cwd(), maxTurns = 1 } = {}) {
+export function argsFor(packet, { resume = null, persist = false, newId = null, cwd = process.cwd(), maxTurns = 1, role = "review", model = null } = {}) {
   const prompt = typeof packet === "string" ? packet : packet.prompt || packet.text || "";
   const common = [
     "--output-format", "json",
     "--max-turns", String(maxTurns),
     "--tools", "read_file",
+    "--permission-mode", "dontAsk",
+    "--deny", "Bash(*)",
+    "--deny", "Edit(*)",
+    "--deny", "MCPTool(*:*)",
+    "--deny", "WebFetch(*)",
+    "--deny", "WebSearch(*)",
     "--no-memory",
     "--no-subagents",
     "--disable-web-search",
     "--cwd", cwd,
+    ...(role==="build"&&model?["-m",model]:[]),
   ];
   if (resume) {
     // continue only — never -s with resume

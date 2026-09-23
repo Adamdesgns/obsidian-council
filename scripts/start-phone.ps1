@@ -32,6 +32,9 @@ if (-not $dnsName) {
 if ($LASTEXITCODE -ne 0) { throw "Tailscale Serve could not publish Council to your private tailnet." }
 
 $env:CODEX_LOCAL_USAGE_READER = "1"
+$env:CLAUDE_LOCAL_USAGE_READER = "1"
+$env:COUNCIL_GROK_PATCH_ENABLED = "1"
+$env:COUNCIL_GROK_MODEL = "grok-4.7-build-fast"
 $env:COUNCIL_ALLOWED_HOSTS = $dnsName
 $env:COUNCIL_PUBLIC_URL = "https://$dnsName"
 Set-Location -LiteralPath $repo

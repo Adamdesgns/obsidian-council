@@ -70,7 +70,7 @@ function resolveCli(member, opts = {}) {
       fake: true,
     };
   }
-  if(member==="cursor"){const c=cursor.connection();return c.ok?{exe:c.exe,prefix:c.prefix,found:true}:{found:false};}
+  if(member==="cursor"){const c=cursor.connection(process.env,{patchOnly:opts.role==="build"});return c.ok?{exe:c.exe,prefix:c.prefix,found:true}:{found:false};}
   const HOME = process.env.USERPROFILE || process.env.HOME || "";
   const APPDATA = process.env.APPDATA || join(HOME, "AppData", "Roaming");
   const LOCALAPPDATA = process.env.LOCALAPPDATA || join(HOME, "AppData", "Local");

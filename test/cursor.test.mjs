@@ -10,6 +10,10 @@ test("Cursor requires activation, exact executable and explicit model",()=>{
 test("native Windows coding stays disconnected when containment is unavailable",()=>{
   if(process.platform==="win32")assert.equal(connection({COUNCIL_CURSOR_ENABLED:"1",COUNCIL_CURSOR_MODEL:"fixture",COUNCIL_CURSOR_EXE:process.execPath}).reason,"cursor-windows-isolation-unavailable");
 });
+test("Cursor patch lane stays in Ask mode even when the Council role is build",()=>{
+  const args=argsFor("author a patch",{cwd:"C:/isolated",model:"fixture",role:"build"});
+  assert.equal(args[args.indexOf("--mode")+1],"ask");
+});
 test("Cursor command keeps sandbox and permissions enabled and pins the model",()=>{
   const args=argsFor("implement",{cwd:"C:/isolated",model:"fixture",role:"build"});
   assert.equal(args[args.indexOf("--sandbox")+1],"enabled");

@@ -1,6 +1,6 @@
 # Usage panel: source map
 
-Status as of 2026-09-22: **no real reading activated in this session.** The panel ships with honest
+Historical status before the evening update below: **no real reading was activated in that session.** The panel shipped with honest
 "Unavailable" readings for all four services. The numbers in the fake preview
 are fixtures and are labelled SIMULATED on screen and in the API (`mode`,
 per-account `simulated`, `status`).
@@ -33,9 +33,17 @@ The default-off Codex metadata reader is wired through sources.mjs. Opt-in requi
 CODEX_LOCAL_USAGE_READER=1; CODEX_USAGE_SESSION_DIR may name the sessions root.
 It follows dated directories, reads bounded tails rather than skipping large logs,
 and recognizes event_msg payload.type=token_count with rate_limits.primary/secondary.
-Only quota numbers/timestamps are returned. Real activation was not performed.
+Only quota numbers/timestamps are returned. Real activation was not performed at that time.
 
 Codex/Claude coding fallback is removed. Both can plan and review. Grok's read-only
 adapter cannot be a builder. Cursor's work lifecycle passes fake tests, but the live
 native Windows CLI failed filesystem-containment preflight and stays blocked.
 See evidence/2026-09-22-takeover/REPORT.md for actual connection state.
+
+## September 22 evening update in this branch
+
+Both Windows launchers now enable the read-only Codex and Claude allowance readers. The Claude adapter uses the signed-in Claude Code OAuth credential only in a request header to the Claude usage endpoint; it returns percentages and reset times, not the token. A live local preview showed Codex weekly and Claude five-hour/weekly readings. The app already running on port 4777 remains the older build until restarted.
+
+Cursor and Grok still have no verified personal account allowance API. Their owner-authenticated manual entry accepts a 0–100 percentage and optional future reset time, stores it under the Council home, labels it **Manual entry**, and stops displaying it one hour later. It is never a live provider reading. Current provider pages remain the source of truth.
+
+For coding, Grok Build and Cursor CLI can now author text patches using read-only tool modes. Council rejects unsafe paths, symlinks, binary/mode changes, renames/deletions, oversized patches, and patches that fail `git apply --check`. Council applies an accepted patch itself, records file hashes, and sends it to the chosen planner for review. Grok's CLI authored a disposable patch successfully. Cursor CLI is installed but its local status remains unauthenticated, so its live coding run is still unverified.

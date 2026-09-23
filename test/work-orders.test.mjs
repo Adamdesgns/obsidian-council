@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdtempSync,rmSync} from "node:fs";
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {openStore} from "../src/store.mjs";
@@ -25,7 +25,7 @@ test("old Grok implementation queues recover to a visible waiting state",t=>{
   c.store.prepare("UPDATE work_orders SET state='implementing' WHERE id=?").run(a.id);
   recoverUnsupportedWork(c.store);
   assert.equal(readWorkOrder(c.store,a.id).state,"waiting_worker");
-  assert.match(readWorkOrder(c.store,a.id).stall_detail,/grok-read-only/);
+  assert.match(readWorkOrder(c.store,a.id).stall_detail,/grok-patch-not-enabled/);
 });
 
 function configuredCursor(t){
@@ -109,6 +109,33 @@ test("HTTP fake Codex worker automatically returns to the chosen planner for rev
   assert.equal((await req("/owner/work-order/"+id+"/accept",{plan_hash:row.plan_hash})).body.state,"completed");
 });
 
+test("fake Grok authors a checked patch and returns to Codex review",async t=>{
+  const home=mkdtempSync(join(tmpdir(),"council-grok-loop-"));
+  const workspace=mkdtempSync(join(tmpdir(),"council-grok-ws-"));
+  const profile=mkdtempSync(join(tmpdir(),"council-grok-profile-"));
+  mkdirSync(join(profile,".grok","bin"),{recursive:true});
+  writeFileSync(join(profile,".grok","bin","grok.exe"),"fixture");
+  writeFileSync(join(workspace,"answer.mjs"),"export const answer = 1;\n");
+  const keys=["COUNCIL_GROK_PATCH_ENABLED","COUNCIL_GROK_MODEL","USERPROFILE"],before=keys.map(k=>process.env[k]);
+  process.env.COUNCIL_GROK_PATCH_ENABLED="1";process.env.COUNCIL_GROK_MODEL="fixture-fast";process.env.USERPROFILE=profile;
+  const diff=["diff --git a/answer.mjs b/answer.mjs","--- a/answer.mjs","+++ b/answer.mjs",
+    "@@ -1 +1 @@","-export const answer = 1;","+export const answer = 2;","END PATCH","Made the requested change."].join("\n");
+  const c=await startCouncil({home,port:0,useFake:true,tickMs:20,log:()=>{},
+    limits:{daily_ceiling:{codex:100,claude:100,grok:100,cursor:100},timeout_ms:{fake:3000}},
+    scriptedReply:(member,msg)=>member==="grok"?diff:msg.content.includes("planning stage")?"Exact plan":"Review confirms answer is 2."});
+  t.after(async()=>{await c.close();keys.forEach((k,i)=>before[i]===undefined?delete process.env[k]:process.env[k]=before[i]);
+    for(const path of [home,workspace,profile])rmSync(path,{recursive:true,force:true});});
+  const req=async(path,body)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+c.api.tokens.owner},body:body===undefined?undefined:JSON.stringify(body)});return r.json();};
+  const started=await req("/owner/delegate",{objective:"Change answer to 2",workspace,planner:"codex",worker:"grok",idempotency_key:"grok-loop"});
+  const until=async state=>{const end=Date.now()+5000;while(Date.now()<end){const row=readWorkOrder(c.api.store,started.id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
+  let row=await until("awaiting_approval");
+  assert.equal((await req("/owner/work-order/"+row.id+"/approve",{plan_hash:row.plan_hash})).state,"implementing");
+  row=await until("awaiting_acceptance");
+  assert.match(row.result,/checked text patch/);
+  assert.equal(readFileSync(join(workspace,"answer.mjs"),"utf8").replace(/\r\n/g,"\n"),"export const answer = 2;\n");
+  assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["codex","grok","codex"]);
+});
+
 function fixture(t){
   // Each test owns both its database and writable target.
   const home=mkdtempSync(join(tmpdir(),"council-work-home-")),workspace=mkdtempSync(join(tmpdir(),"council-workspace-"));
@@ -148,7 +175,7 @@ test("read-only Grok cannot be dispatched as a coding worker",t=>{
   let row=readWorkOrder(c.store,start.id);
   assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:row.plan_hash}).state,"waiting_worker");
   assert.equal(claim(c,start.id,"grok"),undefined);
-  assert.match(readWorkOrder(c.store,start.id).stall_detail,/grok-read-only/);
+  assert.match(readWorkOrder(c.store,start.id).stall_detail,/grok-patch-not-enabled/);
 });
 
 test("worker=codex starts implementing after exact plan approval",t=>{

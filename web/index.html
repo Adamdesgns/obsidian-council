@@ -27,6 +27,10 @@
   .ucard h3 { margin:0 0 6px; font-size:13px; display:flex; justify-content:space-between; gap:6px; align-items:baseline; }
   .ucard .tag { font-size:11px; font-weight:400; color:var(--muted); }
   .ucard .tag.stale, .uwin.low .uval { color:#e6b450; }
+  .ucard .tag.manual { color:#e6b450; }
+  .manual-form { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+  .manual-form input { min-width:0; flex:1 1 125px; }
+  .manual-form button { flex:1 1 auto; }
   .uwin { margin-bottom:8px; }
   .uwin .urow { display:flex; justify-content:space-between; gap:6px; font-size:12px; }
   .uwin .uval { font-variant-numeric:tabular-nums; }
@@ -112,13 +116,13 @@
     </div>
     <div id="delegatePanel">
       <h2>Delegate work</h2>
-      <p>Discuss the work with @codex or @claude. Your chosen planner prepares the plan. After you approve it, Codex codes inside the workspace, the same planner reviews the result, and you decide whether to accept it.</p>
+      <p>Discuss the work with @codex or @claude. Your chosen planner prepares the plan. After you approve it, the coding lane you choose works in the workspace. The same planner reviews the result, and you decide whether to accept it.</p>
       <p id="workerConnection" role="status">Checking coding connection…</p>
       <textarea id="workObjective" placeholder="What should be built?"></textarea>
       <div class="row">
         <label for="workPlanner">Planner</label><select id="workPlanner"><option value="codex">Codex</option><option value="claude">Claude</option></select>
         <input id="workWorkspace" placeholder="Absolute project or isolated worktree path" style="flex:1"/>
-        <select id="workWorker"><option value="codex">Codex coding lane</option></select>
+        <select id="workWorker"><option value="codex">Codex coding lane</option><option value="grok">Grok checked patch lane</option><option value="cursor">Cursor checked patch lane</option></select>
         <button id="startWork">Plan this work</button>
       </div>
       <select id="workSelect" style="width:100%"><option value="">No work orders yet</option></select>
@@ -316,9 +320,9 @@ document.getElementById("chamberSelect").addEventListener("change", pollMessages
 let workRows=[],selectedWork=localStorage.getItem("council.workOrder")||"",workBusy=false;
 function renderWork(){
   const row=workRows.find(r=>r.id===selectedWork);
-  const labels={planning:"Planner is preparing the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Codex is coding in the approved workspace",reviewing:"Planner is reviewing the actual coding result",awaiting_acceptance:"Review ready — inspect the evidence and accept or cancel",completed:"Work accepted by you",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Coding packet ready — not dispatched",waiting_worker:"Waiting for the coding lane"};
+  const labels={planning:"Planner is preparing the implementation plan",awaiting_approval:"Plan ready for your approval",specialist:"Plan handed to ",implementing:"Coding in the approved workspace with "+(row?.worker||"the selected worker"),reviewing:"Planner is reviewing the actual coding result",awaiting_acceptance:"Review ready — inspect the evidence and accept or cancel",completed:"Work accepted by you",stalled:"Paused — needs attention",cancelled:"Cancelled",handoff_ready:"Coding packet ready — not dispatched",waiting_worker:"Waiting for the coding lane"};
   document.getElementById("workStatus").textContent=row?(labels[row.state]||row.state)+(row.state==="specialist"?row.worker:""):"No work order selected.";
-  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE",row.planner+" plan → your approval → Codex coding → "+row.planner+" review → your acceptance",
+  const parts=row?["OBJECTIVE",row.objective,"WORKSPACE",row.workspace,"ROUTE",row.planner+" plan → your approval → "+row.worker+" coding → "+row.planner+" review → your acceptance",
     ...(row.plan?["IMPLEMENTATION PLAN",row.plan]:[]),...(row.specialist_output?["SPECIALIST HANDOFF",row.specialist_output]:[]),
     ...(row.result?["BUILD REPORT",row.result]:[]),...(row.review?["PLANNER REVIEW",row.review]:[]),...(row.handoff?["WORKER PACKET",row.handoff]:[]),...(row.stall_detail?["PAUSED",row.stall_detail]:[])]:[];
   document.getElementById("workText").textContent=parts.join("\n\n");
@@ -332,7 +336,16 @@ async function refreshWork(){
   if(!token())return;
   try{
     const r=await api("/owner/work-orders");workRows=r.work_orders||[];
-    document.getElementById("workerConnection").textContent=r.builder?.configured?"Codex coding is ready on this PC. Council verifies workspace-write containment on every coding run.":"Codex coding needs attention.";
+    const workers=r.builders||[],select=document.getElementById("workWorker"),chosen=select.value;
+    for(const option of select.options){
+      const worker=workers.find(w=>w.id===option.value);
+      option.disabled=!!worker&&!worker.ready;
+      option.textContent=worker?worker.label+" "+worker.mode+(worker.ready?"":" — setup needed"):option.textContent;
+    }
+    if(select.selectedOptions[0]?.disabled)select.value="codex";
+    document.getElementById("workerConnection").textContent=workers.length
+      ?workers.map(w=>w.label+": "+(w.ready?w.mode+" ready":w.reason||"setup needed")).join(" · ")
+      :"Checking coding lanes…";
     if(!workRows.some(r=>r.id===selectedWork))selectedWork=workRows[0]?.id||"";
     const sel=document.getElementById("workSelect");sel.innerHTML="";
     for(const row of workRows){const o=document.createElement("option");o.value=row.id;o.textContent=row.objective.slice(0,80);o.selected=row.id===selectedWork;sel.appendChild(o);}
@@ -459,15 +472,34 @@ function renderUsage(){
       box.appendChild(usageEl("div","ureset",left==null?"Reset time unknown":left<=0?"Reset time passed — refresh due":"Resets in "+usageSpan(left)));
       card.appendChild(box);
     }
-    const det=usageEl("details");det.dataset.service=a.service;det.open=open.has(a.service);det.appendChild(usageEl("summary",null,"Details"));
+    const det=usageEl("details");det.dataset.service=a.service;det.open=open.has(a.service);det.appendChild(usageEl("summary",null,["cursor","grok"].includes(a.service)?"Details / enter reading":"Details"));
     det.appendChild(usageEl("p",null,"Source: "+a.sourceLabel));
     det.appendChild(usageEl("p",null,"Reading taken: "+(a.checkedAt?usageAgo(a.checkedAt)+" ("+a.checkedAt.slice(0,16).replace("T"," ")+"Z)":"never")));
     for(const p of a.pools)det.appendChild(usageEl("p",null,"Pool: "+(p.label||p.id)+(p.modelIds.length?" — covers "+p.modelIds.join(", "):"")));
     if(a.reason)det.appendChild(usageEl("p",null,a.reason));
+    if(["cursor","grok"].includes(a.service)){
+      det.appendChild(usageEl("p",null,"Enter the remaining allowance shown by the provider. This manual reading expires after one hour."));
+      const form=usageEl("form","manual-form"),percent=usageEl("input"),reset=usageEl("input"),save=usageEl("button"),notice=usageEl("p");
+      percent.type="number";percent.min="0";percent.max="100";percent.step="0.1";percent.required=true;percent.placeholder="% left";percent.setAttribute("aria-label",a.service+" percent left");
+      reset.type="datetime-local";reset.setAttribute("aria-label",a.service+" reset time, optional");
+      save.type="submit";save.textContent="Save manual reading";
+      form.append(percent,reset,save);det.append(form,notice);
+      form.onsubmit=async event=>{
+        event.preventDefault();save.disabled=true;notice.textContent="";
+        try{await api("/owner/usage/manual",{method:"POST",body:{service:a.service,remainingPercent:Number(percent.value),resetsAt:reset.value?new Date(reset.value).toISOString():null}});await loadUsage(false);}
+        catch(e){notice.textContent="Could not save: "+e.message;}
+        finally{save.disabled=false;}
+      };
+      if(a.status==="manual"){
+        const clear=usageEl("button");clear.type="button";clear.textContent="Clear manual reading";
+        clear.onclick=async()=>{try{await api("/owner/usage/manual",{method:"POST",body:{service:a.service,remainingPercent:null}});await loadUsage(false);}catch(e){notice.textContent="Could not clear: "+e.message;}};
+        det.appendChild(clear);
+      }
+    }
     card.appendChild(det);cards.appendChild(card);
   }
-  const live=d.accounts.filter(a=>a.status!=="unavailable").length;
-  document.getElementById("usageMeta").textContent=(d.mode==="simulated"?"Simulated fixtures":live+" of "+d.accounts.length+" services connected")+" · checked "+usageAgo(d.lastRefreshAt)+(d.throttled?" · refresh limited, try again shortly":"");
+  const live=d.accounts.filter(a=>a.status==="fresh"||a.status==="stale").length,manual=d.accounts.filter(a=>a.status==="manual").length;
+  document.getElementById("usageMeta").textContent=(d.mode==="simulated"?"Simulated fixtures":live+" live"+(manual?" · "+manual+" manual":"")+" of "+d.accounts.length+" services")+" · checked "+usageAgo(d.lastRefreshAt)+(d.throttled?" · refresh limited, try again shortly":"");
 }
 let usageBusy=false;
 async function loadUsage(force){
@@ -478,7 +510,7 @@ async function loadUsage(force){
 }
 document.getElementById("usageRefresh").onclick=()=>loadUsage(true);
 setInterval(()=>loadUsage(false),60000);
-setInterval(renderUsage,30000);
+setInterval(()=>{if(!document.getElementById("usageCards").contains(document.activeElement))renderUsage();},30000);
 loadUsage(false);
 
 refreshDecisions();

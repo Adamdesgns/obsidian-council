@@ -9,6 +9,7 @@
 // response. Timestamps are ISO 8601 UTC strings, or null when unknown.
 import { fixtureAdapters } from "./fixtures.mjs";
 import { unconnectedAdapters, SERVICES } from "./sources.mjs";
+import {createManualUsage} from "./manual.mjs";
 
 const STATUSES = ["fresh", "stale", "unavailable", "manual", "simulated"];
 const LOW_PERCENT = 20;
@@ -135,6 +136,7 @@ export function createUsageService(opts = {}) {
   // Fixture data is opt-in only. Without the flag an unconfigured Council
   // reports every service as unavailable; it never falls back to a demo.
   const adapters = opts.adapters || (fixtureMode ? fixtureAdapters() : unconnectedAdapters());
+  const manual = !fixtureMode && opts.manualPath ? createManualUsage({file:opts.manualPath,clock}) : null;
   const services = [...new Set([...SERVICES, ...Object.keys(adapters)])];
   const cache = new Map();   // service -> last normalized account
   const sources = new Map(); // service -> { failures, nextAttemptAt }
@@ -192,7 +194,10 @@ export function createUsageService(opts = {}) {
     else if (lastRefreshAt == null || (refresh ? age >= minRefreshMs : age >= Math.max(maxAgeMs, minRefreshMs))) await refreshAll();
     else if (refresh) throttled = true;
     const now2 = clock();
-    const accounts = services.map(s => cache.get(s)).filter(Boolean).map(a => ageAccount(a, now2, maxAgeMs));
+    const accounts = services.map(s => {
+      const account=cache.get(s);
+      return account?.status==="unavailable" && manual?.get(s) || account;
+    }).filter(Boolean).map(a => ageAccount(a, now2, a.status==="manual"?60*60_000:maxAgeMs));
     return {
       mode: fixtureMode ? "simulated" : accounts.some(a => a.status !== "unavailable") ? "connected" : "unconnected",
       throttled,
@@ -203,5 +208,5 @@ export function createUsageService(opts = {}) {
     };
   }
 
-  return { read };
+  return { read, setManual: entry => manual?.set(entry) || {ok:false,reason:"manual-reading-disabled"} };
 }
