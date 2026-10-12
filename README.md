@@ -1,84 +1,62 @@
 # The Obsidian Council
 
-A private Windows desk where Adam can talk with Codex or Claude, approve a plan, choose Codex, Grok, or Cursor for coding, have the original planner review the result, and make the final acceptance decision.
+Your AI agents, one shared room. Give Codex, Claude and Grok a question, let them pass work between themselves, and keep the decisions with you.
 
-## Use it on this PC
+Council runs on your Windows PC. It stores conversation and work history locally and uses your installed, signed-in coding assistants. There is no Council account or hosted backend. Model calls still use each provider's subscription or allowance.
 
-Double-click `START-COUNCIL.cmd`. The terminal prints one private local link. Open that link and leave the terminal running.
+## Start here
 
-The page remembers the owner token in that browser and removes it from the address bar. Council listens only on `127.0.0.1`; do not expose its port.
-
-## Use it from your phone
-
-Install Tailscale on this PC and your phone, sign both into the same tailnet, then double-click `START-COUNCIL-PHONE.cmd`. It starts a private HTTPS Tailscale Serve address and prints the one owner link to open on your phone. Keep the PC awake and the launcher window open.
-
-Council still listens only on `127.0.0.1`. The phone launcher admits only this PC's exact MagicDNS hostname through Tailscale; it does not use Tailscale Funnel or publish Council to the public internet. After the first visit, use the browser's **Add to Home Screen** action for an app icon.
-
-## Work-order flow
-
-1. Create a chamber and discuss the work with `@codex` or `@claude` in Conversation.
-2. Under **Delegate work**, choose that assistant as Planner, enter the exact project or isolated worktree path, and describe the objective.
-3. Read the implementation plan. Send feedback for a revision, or click **Approve plan and start coding**.
-4. Choose a coding lane. Codex edits inside the approved workspace and proves its effective `workspace-write` sandbox. Grok and Cursor inspect files with read-only tools and return a bounded text patch; Council checks its paths and context before applying it. Their lane pauses if no valid patch returns.
-5. The chosen planner reviews the actual files and verification evidence in a read-only Windows sandbox.
-6. Read the report and click **Accept reviewed work** only when you agree.
-
-Council prompts prohibit pushing, merging, deploying, spending, contacting anyone, and using credentials. Those remain separate owner decisions.
-
-## Other Floor features
-
-- Directed conversations such as `@codex plan this @grok critique it @codex revise it` survive restarts.
-- **Deliberate** asks two members independently and brings the final answer to the Black Seat.
-- **HALT** stops member work and survives restarts.
-- Messages, runs, deliveries, and decisions are stored in a hash-chained local SQLite record under `%LOCALAPPDATA%\ObsidianCouncil`.
-- The usage panel reads local Codex quota metadata and Claude Code's signed-in allowance when launched through either Windows launcher. Cursor and Grok can take an owner-entered reading that expires after one hour; this is always labeled manual.
-
-## Requirements
-
-- Windows and Node 24 or newer.
-- The installed Codex CLI logged in with ChatGPT. This PC was verified on 2026-09-22.
-- Claude Code logged in if Claude is selected as planner. This PC was verified on 2026-09-22.
-- Grok Build CLI signed in if Grok is selected for coding. The launcher pins `grok-4.7-build-fast`.
-- Cursor CLI signed in with its stable local runtime at `%LOCALAPPDATA%\Programs\ObsidianCouncilCursorCLI`. Both launchers pin the verified `composer-2.5` model. Cursor's workspace-trust gate remains closed until Adam authorizes `COUNCIL_CURSOR_TRUST_APPROVED=1`; this only affects an exact approved coding work order, which stays in read-only Ask mode and returns a checked patch.
-
-## Commands
+Install **Node.js 24 or newer**, **Git**, and sign in to **Codex CLI**. Claude Code and Grok are optional. Current Claude Code must support restricted mode; version 2.1.286 was checked during release preparation.
 
 ```powershell
+git clone https://github.com/Adamdesgns/obsidian-council.git
+cd obsidian-council
+npm run doctor
 npm start
+```
+
+There are no runtime npm dependencies to install. The setup check is offline: it checks installed programs without starting agents or reading account credentials. Open the private link printed by Council and keep the terminal open. On later visits you can use `START-COUNCIL.cmd`.
+
+See [setup and optional agents](docs/SETUP.md) for install locations, models, usage readings and troubleshooting.
+
+## Work together
+
+1. Create a chamber and send a message such as `@codex draft a plan @grok review it @codex revise it`.
+2. Under **Delegate work**, choose Codex or Claude as planner, the coding agent, and the exact project folder. Describe the objective.
+3. Read the plan. Send feedback until it is right, then approve that exact plan.
+4. Codex can code inside its workspace sandbox. Grok and Cursor use read-only tools to propose a patch; Council validates the entire patch before applying it inside the approved folder.
+5. The original planner reviews the result. Read the report and accept it when satisfied.
+
+**HALT** stops member work and persists across restarts. Closing Council also stops its own running workers. Interrupted coding pauses for your attention; it is not silently rerun.
+
+The optional **Deliberate** flow compares independent answers and brings the decision back to you. Replies and delivery acknowledgements are saved together so a failure cannot acknowledge work without saving its result.
+
+## Optional phone access
+
+Install Tailscale on your PC and phone, connect both to the same private network, and run `START-COUNCIL-PHONE.cmd`. Open its private HTTPS link on the phone. Keep the PC awake and Council running.
+
+The launcher checks for conflicting routes and binds Council before configuring the private proxy. It refuses an existing public Funnel route. Council stays on `127.0.0.1`; do not publish its port. You can add the page to your home screen, but it needs the PC connection to work.
+
+## Test without using model allowance
+
+```powershell
 npm test
 npm run preview:fake
 ```
 
-`npm start` uses the real configured CLIs. `npm run preview:fake` is a simulated walkthrough. The automated suite never starts real providers.
+Both use fake providers and isolated temporary data. The preview labels simulated usage and responses. Optional browser acceptance uses `node scripts/qa-browser.mjs` with Playwright available and Edge installed; it also uses simulated providers.
 
-## Verification
+The [release readiness report](docs/RELEASE-READINESS.md) separates fresh automated/browser evidence, historical real-provider evidence, and any remaining live/device checks. Older evidence folders are dated records, not fresh test results.
 
-- 136 automated tests pass in this branch.
-- A real Windows proof completed `Codex plan → owner approval → Codex coding → Codex read-only review → owner acceptance`.
-- A second real Windows proof completed the same lifecycle with Claude as planner/reviewer and Codex as coder.
-- The build changed a disposable module from `1` to `2`, ran its test successfully, and recorded a verified `workspace-write` sandbox policy.
-- The reviewer independently read the files and reran the test in a read-only elevated Windows sandbox.
-- Grok's CLI authored a patch in a disposable folder and Council's checked patch applier applied it. The full Grok and Cursor work-order lifecycles passed fake-provider tests. Cursor's local CLI is signed in and offers the pinned `composer-2.5` model, but a live patch run still needs workspace trust approval.
+## Data and boundaries
 
-Evidence: `evidence/2026-09-22-windows-codex/live-proof.json`.
-
-## Main files
-
-```text
-START-COUNCIL.cmd       one-click Windows launcher
-START-COUNCIL-PHONE.cmd one-click private Tailscale phone launcher
-src/council.mjs         service and dispatcher entry point
-src/api.mjs             loopback API, tokens, work-order endpoints and HALT
-src/work-orders.mjs     plan, approval, coding, review and acceptance lifecycle
-src/dispatcher.mjs      durable provider dispatch and recovery
-src/adapters/           Codex, Claude, Grok and Cursor adapters
-src/patch-worker.mjs    checked application of Cursor/Grok text patches
-src/usage/              live and manual usage readings
-src/store.mjs           SQLite record and hash chain
-web/index.html          local Council interface
-config/limits.json      run ceilings, timeouts and hop caps
-```
+- Runtime data lives in `%LOCALAPPDATA%\ObsidianCouncil`, outside the source checkout. `COUNCIL_HOME` selects a separate data directory.
+- The private owner link grants control. Keep it private. Council removes its token from the address bar after opening it.
+- A local SQLite record retains messages, runs and owner decisions with a verifiable event chain.
+- Limits in `config/limits.json` are Council run counts, not provider subscription allowance.
+- Cursor trust is optional, scoped to one exact folder, and off by default.
+- Publishing, GitHub push, deployment, purchases and outreach are separate decisions. Review generated code and provider reports before accepting the result.
 
 ## License
 
-MIT.
+MIT. Built by [Adam Designs](https://github.com/Adamdesgns).

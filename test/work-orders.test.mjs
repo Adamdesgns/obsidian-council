@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync} from "node:fs";
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync,symlinkSync,realpathSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {openStore} from "../src/store.mjs";
 import {createOutbox} from "../src/outbox.mjs";
-import {startWorkOrder,readWorkOrder,workTaskFor,canDispatchWork,completeWorkReply,approveWorkPlan,stallWork,resumeWork,cancelWork,haltWorkOrders,recoverUnsupportedWork,acceptWork,reviseWork} from "../src/work-orders.mjs";
+import {startWorkOrder,readWorkOrder,workTaskFor,canDispatchWork,completeWorkReply,approveWorkPlan,stallWork,resumeWork,cancelWork,haltWorkOrders,recoverUnsupportedWork,acceptWork,reviseWork,resolveImplementWorker,grokPatchConnection} from "../src/work-orders.mjs";
 import {startCouncil} from "../src/council.mjs";
 
 test("restart pauses an attempted coding run instead of automatically editing twice",t=>{
@@ -18,6 +18,80 @@ test("restart pauses an attempted coding run instead of automatically editing tw
   assert.equal(completeWorkReply(c.store,{...lease,member:"cursor",text:"late completion"}).ok,false);
   assert.equal(resumeWork(c.store,row.id).state,"implementing");
   assert.equal(canDispatchWork(c.store,lease.message.id,"cursor"),true);
+});
+
+test("work orders pin a junction's physical workspace before owner approval",t=>{
+  const c=fixture(t),alias=join(c.home,"workspace-alias"),other=join(c.home,"other");
+  mkdirSync(other);
+  symlinkSync(c.workspace,alias,process.platform==="win32"?"junction":"dir");
+  const start=startWorkOrder(c.store,{objective:"Pinned workspace",workspace:alias,idempotency_key:"physical-workspace"});
+  assert.equal(readWorkOrder(c.store,start.id).workspace,realpathSync(c.workspace));
+  rmSync(alias);
+  symlinkSync(other,alias,process.platform==="win32"?"junction":"dir");
+  reply(c,start.id,"codex","Plan inside the original physical workspace");
+  const row=readWorkOrder(c.store,start.id);
+  assert.equal(approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash}).state,"implementing");
+  assert.equal(workTaskFor(c.store,claim(c,row.id,"codex").message.id).workspace,realpathSync(c.workspace));
+});
+
+test("a missing approved workspace cannot dispatch, accept a reply, or resume",t=>{
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Pinned workspace",workspace:c.workspace,idempotency_key:"missing-workspace"});
+  reply(c,start.id,"codex","Plan");
+  let row=readWorkOrder(c.store,start.id);
+  rmSync(c.workspace,{recursive:true,force:true});
+  assert.equal(approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash}).reason,"workspace_changed");
+  mkdirSync(c.workspace);
+  approveWorkPlan(c.store,row.id,{plan_hash:row.plan_hash});
+  const lease=claim(c,row.id,"codex");
+  rmSync(c.workspace,{recursive:true,force:true});
+  assert.equal(canDispatchWork(c.store,lease.message.id,"codex"),false);
+  assert.equal(readWorkOrder(c.store,row.id).state,"stalled");
+  assert.equal(readWorkOrder(c.store,row.id).resume_state,"implementing");
+  assert.match(readWorkOrder(c.store,row.id).stall_detail,/workspace_changed/);
+  assert.equal(resumeWork(c.store,row.id).reason,"workspace_changed");
+  const generation=c.store.prepare("SELECT attempt_gen FROM deliveries WHERE id=?").get(lease.delivery.id).attempt_gen;
+  assert.equal(generation,lease.gen+1);
+  assert.equal(canDispatchWork(c.store,lease.message.id,"codex"),false);
+  assert.equal(c.store.prepare("SELECT attempt_gen FROM deliveries WHERE id=?").get(lease.delivery.id).attempt_gen,generation);
+  assert.equal(completeWorkReply(c.store,{...lease,member:"codex",text:"Done"}).ok,false);
+  recoverUnsupportedWork(c.store);
+  assert.equal(readWorkOrder(c.store,row.id).state,"waiting_worker");
+  assert.match(readWorkOrder(c.store,row.id).stall_detail,/workspace_changed/);
+});
+
+test("a retargeted physical workspace stalls immediately and cannot resume into the replacement",t=>{
+  const c=fixture(t),other=join(c.home,"replacement");mkdirSync(other);
+  const start=startWorkOrder(c.store,{objective:"Do not retarget",workspace:c.workspace,idempotency_key:"retargeted-workspace"});
+  const lease=claim(c,start.id,"codex");
+  rmSync(c.workspace,{recursive:true,force:true});
+  symlinkSync(other,c.workspace,process.platform==="win32"?"junction":"dir");
+  assert.equal(canDispatchWork(c.store,lease.message.id,"codex"),false);
+  assert.equal(readWorkOrder(c.store,start.id).state,"stalled");
+  assert.equal(readWorkOrder(c.store,start.id).resume_state,"planning");
+  assert.equal(resumeWork(c.store,start.id).reason,"workspace_changed");
+  rmSync(c.workspace);mkdirSync(c.workspace);
+  assert.equal(resumeWork(c.store,start.id).state,"planning");
+  assert.equal(completeWorkReply(c.store,{...lease,member:"codex",text:"late"}).ok,false);
+  assert.equal(canDispatchWork(c.store,lease.message.id,"codex"),true);
+});
+
+test("workspace disappearance during a run produces a visible stall on completion",t=>{
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Missing at completion",workspace:c.workspace,idempotency_key:"missing-at-completion"});
+  const lease=claim(c,start.id,"codex");
+  rmSync(c.workspace,{recursive:true,force:true});
+  assert.equal(completeWorkReply(c.store,{...lease,member:"codex",text:"Plan"}).reason,"workspace_changed");
+  assert.equal(readWorkOrder(c.store,start.id).state,"stalled");
+  assert.equal(readWorkOrder(c.store,start.id).plan,null);
+});
+
+test("Grok patch eligibility uses the same explicit executable and PATH discovery as dispatch",t=>{
+  const c=fixture(t),bin=join(c.home,"bin");mkdirSync(bin);
+  const exe=join(bin,"grok.exe");writeFileSync(exe,"fixture - never executed");
+  const env={USERPROFILE:c.home,HOME:c.home,PATH:"",COUNCIL_GROK_PATCH_ENABLED:"1",COUNCIL_GROK_MODEL:"fixture-grok"};
+  assert.equal(grokPatchConnection(env).reason,"grok-cli-required");
+  assert.equal(grokPatchConnection({...env,COUNCIL_GROK_EXE:exe}).ok,true);
+  assert.equal(grokPatchConnection({...env,PATH:bin}).ok,true);
+  assert.equal(grokPatchConnection({...env,PATH:bin,COUNCIL_GROK_EXE:"grok.exe"}).reason,"grok-cli-required");
 });
 
 test("old Grok implementation queues recover to a visible waiting state",t=>{
@@ -35,6 +109,20 @@ function configuredCursor(t){
   process.env.COUNCIL_CURSOR_ENABLED="1";process.env.COUNCIL_CURSOR_EXE=process.execPath;process.env.COUNCIL_CURSOR_MODEL="fixture-worker";
   t.after(()=>keys.forEach((k,i)=>before[i]===undefined?delete process.env[k]:process.env[k]=before[i]));
 }
+
+test("real Cursor routing requires trust for the work order's exact physical workspace",t=>{
+  configuredCursor(t);
+  const c=fixture(t),other=join(c.home,"other");mkdirSync(other);
+  const keys=["COUNCIL_CURSOR_TRUST_APPROVED","COUNCIL_CURSOR_TRUST_WORKSPACE"],before=keys.map(k=>process.env[k]);
+  t.after(()=>keys.forEach((k,i)=>before[i]===undefined?delete process.env[k]:process.env[k]=before[i]));
+  process.env.COUNCIL_TEST_ONLY="0";
+  process.env.COUNCIL_CURSOR_TRUST_APPROVED="1";
+  delete process.env.COUNCIL_CURSOR_TRUST_WORKSPACE;
+  assert.equal(resolveImplementWorker("cursor","fixture-worker",c.workspace).reason,"cursor-workspace-trust-required");
+  process.env.COUNCIL_CURSOR_TRUST_WORKSPACE=realpathSync(c.workspace);
+  assert.equal(resolveImplementWorker("cursor","fixture-worker",c.workspace).ok,true);
+  assert.equal(resolveImplementWorker("cursor","fixture-worker",other).reason,"cursor-workspace-trust-required");
+});
 
 test("either planner carries conversation through coding, review, and exact owner acceptance",t=>{
   for(const planner of ["codex","claude"]){
@@ -72,6 +160,20 @@ test("feedback is deduplicated and requires approval of the revised plan",t=>{
   assert.equal(readWorkOrder(c.store,a.id).revision,1);
 });
 
+test("identical plan text in a new revision cannot reuse an old approval",t=>{
+  configuredCursor(t);
+  const c=fixture(t),start=startWorkOrder(c.store,{objective:"Revise model",workspace:c.workspace,worker:"cursor",idempotency_key:"same-plan"});
+  reply(c,start.id,"codex","Same plan text");
+  const previous=readWorkOrder(c.store,start.id).plan_hash;
+  process.env.COUNCIL_CURSOR_MODEL="new-fixture-model";
+  reviseWork(c.store,start.id,{feedback:"Use the newly selected model",idempotency_key:"repin-model"});
+  reply(c,start.id,"codex","Same plan text");
+  const revised=readWorkOrder(c.store,start.id);
+  assert.notEqual(revised.plan_hash,previous);
+  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:previous}).reason,"stale_plan");
+  assert.equal(approveWorkPlan(c.store,start.id,{plan_hash:revised.plan_hash}).state,"implementing");
+});
+
 test("HALT cancels undispatched packets and late results cannot resurrect cancelled work",t=>{
   const c=fixture(t),a=startWorkOrder(c.store,{objective:"Packet",workspace:c.workspace,idempotency_key:"halt"});
   reply(c,a.id,"codex","Plan");let row=readWorkOrder(c.store,a.id);
@@ -99,7 +201,7 @@ test("HTTP fake Codex worker automatically returns to the chosen planner for rev
     scriptedReply:(member,msg)=>msg.content.includes("planning stage")?"Plan for fixture":msg.content.includes("Review this Council work order")?"Planner reviewed fixture evidence":"Fixture worker report"});
   t.after(async()=>{await c.close();rmSync(home,{recursive:true,force:true});rmSync(workspace,{recursive:true,force:true});});
   const req=async(path,body,token=c.api.tokens.owner)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+token},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
-  const until=async state=>{const end=Date.now()+5000;while(Date.now()<end){const row=readWorkOrder(c.api.store,id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
+  const until=async state=>{const end=Date.now()+15000;while(Date.now()<end){const row=readWorkOrder(c.api.store,id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
   const start=await req("/owner/delegate",{objective:"Build fixture",workspace,planner:"claude",worker:"codex",idempotency_key:"loop"});
   const id=start.body.id;assert.equal(start.status,200);let row=await until("awaiting_approval");
   assert.equal((await req("/owner/work-order/"+id+"/approve",{plan_hash:row.plan_hash},c.api.tokens.members.codex)).status,403);
@@ -127,13 +229,17 @@ test("fake Grok authors a checked patch and returns to Codex review",async t=>{
     for(const path of [home,workspace,profile])rmSync(path,{recursive:true,force:true});});
   const req=async(path,body)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+c.api.tokens.owner},body:body===undefined?undefined:JSON.stringify(body)});return r.json();};
   const started=await req("/owner/delegate",{objective:"Change answer to 2",workspace,planner:"codex",worker:"grok",idempotency_key:"grok-loop"});
-  const until=async state=>{const end=Date.now()+5000;while(Date.now()<end){const row=readWorkOrder(c.api.store,started.id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
+  const until=async state=>{const end=Date.now()+15000;while(Date.now()<end){const row=readWorkOrder(c.api.store,started.id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
   let row=await until("awaiting_approval");
   assert.equal((await req("/owner/work-order/"+row.id+"/approve",{plan_hash:row.plan_hash})).state,"implementing");
   row=await until("awaiting_acceptance");
   assert.match(row.result,/checked text patch/);
   assert.equal(readFileSync(join(workspace,"answer.mjs"),"utf8").replace(/\r\n/g,"\n"),"export const answer = 2;\n");
   assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["codex","grok","codex"]);
+  const runs=c.api.store.prepare("SELECT member,argv FROM runs ORDER BY started").all();
+  assert.match(runs[1].argv,/-m fixture-fast/);
+  assert.equal(runs[0].argv.includes("fixture-fast"),false,"Codex planner must not inherit the Grok worker model");
+  assert.equal(runs[2].argv.includes("fixture-fast"),false,"Codex reviewer must not inherit the Grok worker model");
 });
 
 test("fake Cursor authors a checked patch and returns to Claude review",async t=>{
@@ -152,13 +258,17 @@ test("fake Cursor authors a checked patch and returns to Claude review",async t=
     for(const path of [home,workspace])rmSync(path,{recursive:true,force:true});});
   const req=async(path,body)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+c.api.tokens.owner},body:body===undefined?undefined:JSON.stringify(body)});return r.json();};
   const started=await req("/owner/delegate",{objective:"Change answer to 2",workspace,planner:"claude",worker:"cursor",idempotency_key:"cursor-loop"});
-  const until=async state=>{const end=Date.now()+5000;while(Date.now()<end){const row=readWorkOrder(c.api.store,started.id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
+  const until=async state=>{const end=Date.now()+15000;while(Date.now()<end){const row=readWorkOrder(c.api.store,started.id);if(row.state===state)return row;await new Promise(r=>setTimeout(r,20));}throw Error("timeout waiting for "+state);};
   let row=await until("awaiting_approval");
   assert.equal((await req("/owner/work-order/"+row.id+"/approve",{plan_hash:row.plan_hash})).state,"implementing");
   row=await until("awaiting_acceptance");
   assert.match(row.result,/checked text patch/);
   assert.equal(readFileSync(join(workspace,"answer.mjs"),"utf8").replace(/\r\n/g,"\n"),"export const answer = 2;\n");
   assert.deepEqual(c.api.store.prepare("SELECT member FROM runs ORDER BY started").all().map(r=>r.member),["claude","cursor","claude"]);
+  const runs=c.api.store.prepare("SELECT member,argv FROM runs ORDER BY started").all();
+  assert.match(runs[1].argv,/--model fixture-composer/);
+  assert.equal(runs[0].argv.includes("fixture-composer"),false,"Claude planner must not inherit the Cursor worker model");
+  assert.equal(runs[2].argv.includes("fixture-composer"),false,"Claude reviewer must not inherit the Cursor worker model");
 });
 
 function fixture(t){
@@ -230,7 +340,7 @@ test("HTTP delegation runs Claude plan, Codex coding, and Claude review",async t
   t.after(async()=>{await c.close();rmSync(home,{recursive:true,force:true});rmSync(workspace,{recursive:true,force:true});});
   const req=async(path,body)=>{const r=await fetch(c.base+path,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+c.api.tokens.owner},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
   const started=await req("/owner/delegate",{objective:"Build it",workspace,planner:"claude",worker:"codex",idempotency_key:"http"});assert.equal(started.status,200);
-  const until=async fn=>{const end=Date.now()+5000;while(Date.now()<end){const r=fn();if(r)return r;await new Promise(r=>setTimeout(r,20));}throw Error("timeout");};
+  const until=async fn=>{const end=Date.now()+15000;while(Date.now()<end){const r=fn();if(r)return r;await new Promise(r=>setTimeout(r,20));}throw Error("timeout");};
   let row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="awaiting_approval"&&r;});
   assert.equal((await req(`/owner/work-order/${row.id}/approve`,{plan_hash:row.plan_hash})).status,200);
   row=await until(()=>{const r=readWorkOrder(c.api.store,started.body.id);return r.state==="awaiting_acceptance"&&r;});

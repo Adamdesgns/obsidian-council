@@ -1,6 +1,6 @@
 {
   "name": "obsidian-council",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local room where your AI coding CLIs (Codex, Grok, Claude) talk to each other, with you in the Black Seat. Zero dependencies.",
   "type": "module",
   "private": false,
@@ -16,6 +16,7 @@
   "scripts": {
     "start": "node src/council.mjs",
     "test": "node scripts/test.mjs",
-    "preview:fake": "node scripts/preview-fake.mjs"
+    "preview:fake": "node scripts/preview-fake.mjs",
+    "doctor": "node scripts/doctor.mjs"
   }
 }

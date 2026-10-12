@@ -26,6 +26,7 @@ export function argsFor(packet, opts = {}) {
     persist = false,
     cwd = process.cwd(),
     role = "review",
+    model = null,
   } = opts;
   const prompt = typeof packet === "string" ? packet : packet.prompt || packet.text || "";
   const commonHead = [
@@ -33,6 +34,7 @@ export function argsFor(packet, opts = {}) {
     "--json",
     "--ignore-user-config",
     "--skip-git-repo-check",
+    ...(model ? ["--model", model] : []),
   ];
 
   if (role === "build") {
@@ -79,11 +81,10 @@ export function envFor(role, cwd) {
  * Read effective sandbox_policy from Codex rollout JSONL for thread_id.
  * Mirrors spike/a3b-sandbox-explicit.mjs effectivePolicy (do not edit spike/).
  */
-export function effectivePolicy(threadId, { now = new Date(), home = process.env.USERPROFILE || process.env.HOME } = {}) {
+export function effectivePolicy(threadId, { now = new Date(), home = process.env.USERPROFILE || process.env.HOME, codexHome } = {}) {
   if (!threadId) return { note: "no thread id" };
   const dir = join(
-    home,
-    ".codex",
+    codexHome || join(home, ".codex"),
     "sessions",
     String(now.getFullYear()),
     String(now.getMonth() + 1).padStart(2, "0"),

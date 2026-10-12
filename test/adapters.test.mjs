@@ -1,14 +1,16 @@
 // test/adapters.test.mjs — P2-4 acceptance (fake members only; no live Codex Build)
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store.mjs";
-import { spawnMember, redact } from "../src/adapters/spawn.mjs";
+import { spawnMember, redact, minEnv } from "../src/adapters/spawn.mjs";
 import * as grok from "../src/adapters/grok.mjs";
 import * as codex from "../src/adapters/codex.mjs";
+import * as claude from "../src/adapters/claude.mjs";
+import {prepareBridge} from "../src/adapters/bridge-config.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const FAKE = join(ROOT, "src", "testutil", "fake-member.mjs");
@@ -23,6 +25,41 @@ function cleanup(home, store) {
 }
 
 describe("P2-4 adapters and spawn", () => {
+  it("Claude file inspection cannot inherit unrelated MCP servers or executable tools", () => {
+    const args=claude.argsFor("read-only review");
+    assert.equal(args[args.indexOf("--permission-mode")+1],"dontAsk");
+    assert.equal(args[args.indexOf("--tools")+1],"Read,Glob,Grep");
+    assert.equal(args[args.indexOf("--allowedTools")+1],"Read,Glob,Grep,mcp__council__*");
+    for(const flag of ["--restricted","--strict-mcp-config","--disable-slash-commands","--no-chrome"])assert.ok(args.includes(flag),flag);
+    assert.equal(args.includes("--dangerously-skip-permissions"),false);
+    assert.equal(args.includes("--bare"),false,"subscription OAuth remains usable");
+  });
+
+  it("Claude managed work has no MCP config; conversational work supplies only Council", () => {
+    const cwd=mkdtempSync(join(tmpdir(),"council-claude-isolation-"));
+    let bridge;
+    try {
+      assert.deepEqual(prepareBridge("claude",{cwd,token:"fixture",disabled:true}).extraArgs,[]);
+      bridge=prepareBridge("claude",{cwd,token:"fixture",apiBase:"http://127.0.0.1:4777"});
+      const config=JSON.parse(readFileSync(bridge.extraArgs[1],"utf8"));
+      assert.deepEqual(Object.keys(config.mcpServers),["council"]);
+    } finally {bridge?.cleanup();rmSync(cwd,{recursive:true,force:true});}
+  });
+
+  it("preserves explicit provider profile directories without forwarding API keys", () => {
+    const previous = {CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,OPENAI_API_KEY:process.env.OPENAI_API_KEY};
+    try {
+      process.env.CODEX_HOME="C:\\fixture\\codex";
+      process.env.CLAUDE_CONFIG_DIR="C:\\fixture\\claude";
+      process.env.OPENAI_API_KEY="fixture-not-a-real-key";
+      const env=minEnv();
+      assert.equal(env.CODEX_HOME,process.env.CODEX_HOME);
+      assert.equal(env.CLAUDE_CONFIG_DIR,process.env.CLAUDE_CONFIG_DIR);
+      assert.equal(env.OPENAI_API_KEY,undefined);
+    } finally {
+      for(const [key,value] of Object.entries(previous))if(value===undefined)delete process.env[key];else process.env[key]=value;
+    }
+  });
   it("(a) run that exceeds ceiling is refused before spawn and recorded", async () => {
     const home = tempHome();
     process.env.COUNCIL_HOME = home;
@@ -110,6 +147,15 @@ describe("P2-4 adapters and spawn", () => {
     assert.deepEqual(denied,["Bash(*)","Edit(*)","MCPTool(*:*)","WebFetch(*)","WebSearch(*)"]);
     assert.equal(args[args.indexOf("--tools")+1],"read_file");
     assert.equal(args[args.indexOf("--permission-mode")+1],"dontAsk");
+  });
+
+  it("Codex and Grok honor an explicitly configured model in review and build roles", () => {
+    for (const role of ["review","build"]) {
+      const codexArgs=codex.argsFor("fixture",{role,model:"fixture-codex-model"});
+      assert.equal(codexArgs[codexArgs.indexOf("--model")+1],"fixture-codex-model");
+      const grokArgs=grok.argsFor("fixture",{role,model:"fixture-grok-model"});
+      assert.equal(grokArgs[grokArgs.indexOf("-m")+1],"fixture-grok-model");
+    }
   });
 
   it("Codex Build args include A3b flags; review stays read-only", () => {
@@ -214,5 +260,17 @@ describe("P2-4 adapters and spawn", () => {
     } finally {
       try { rmSync(home, { recursive:true, force: true }); } catch { /* */ }
     }
+  });
+
+  it("Build verification treats CODEX_HOME as the configuration directory", () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "council-custom-codex-"));
+    const day = new Date();
+    const dir = join(codexHome, "sessions", String(day.getFullYear()), String(day.getMonth()+1).padStart(2,"0"), String(day.getDate()).padStart(2,"0"));
+    mkdirSync(dir,{recursive:true});
+    writeFileSync(join(dir,"rollout-custom-thread.jsonl"), JSON.stringify({sandbox_policy:{type:"workspace-write"},approval_policy:"never"})+"\n");
+    try {
+      const result={stdout:JSON.stringify({type:"thread.started",thread_id:"custom-thread"})};
+      assert.equal(codex.verifyBuildResult(result,{codexHome}).ok,true);
+    } finally { rmSync(codexHome,{recursive:true,force:true}); }
   });
 });

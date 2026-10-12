@@ -1,0 +1,279 @@
+▶ P2-4 adapters and spawn
+  ✔ preserves explicit provider profile directories without forwarding API keys (1.0116ms)
+  ✔ (a) run that exceeds ceiling is refused before spawn and recorded (29.7014ms)
+  ✔ (b) run that exceeds timeout is killed and runs row says so (2726.3908ms)
+  ✔ (c) planted token-like string is redacted in the stored row (1770.2707ms)
+  ✔ (d) argsFor for Grok never emits -s together with resume (0.4706ms)
+  ✔ Grok patch authoring denies write and external tools (11.3931ms)
+  ✔ Codex and Grok honor an explicitly configured model in review and build roles (0.3083ms)
+  ✔ Codex Build args include A3b flags; review stays read-only (0.2678ms)
+  ✔ Codex Build envFor points HOME/TEMP inside workspace (16.926ms)
+  ✔ Codex Build removes its workspace-local runtime folders after exit (1563.7469ms)
+  ✔ Build verifyBuildResult refuses when rollout is not workspace-write (115.5786ms)
+  ✔ Build verifyBuildResult accepts workspace-write rollout (23.2196ms)
+  ✔ Build verification treats CODEX_HOME as the configuration directory (31.9281ms)
+✔ P2-4 adapters and spawn (6296.8215ms)
+▶ P2-3 loopback API
+  ✔ (a) member token on /owner/sanction is 403 (55.5873ms)
+  ✔ (b) body sender differing from token is overwritten; sender_spoof_attempt recorded (29.1506ms)
+  ✔ (c) Host: evil.example is 403 (12.834ms)
+  ✔ (d) missing token is 401 (4.7135ms)
+✔ P2-3 loopback API (243.3171ms)
+▶ release API delivery boundaries
+  ✔ owner receipts stay in history without inflating the member backlog (106.4172ms)
+  ✔ member acknowledgements cannot consume work-order engine deliveries (49.2538ms)
+  ✔ stale replies cannot publish content and a current reply is stored once (55.1137ms)
+  ✔ a failed reply write leaves the input leased for a safe retry (45.5111ms)
+  ✔ unclaimed input and caller-selected queue states cannot be acknowledged (44.0999ms)
+  ✔ members cannot change dispatcher chain state through message fields (44.9789ms)
+  ✔ message cursors preserve every message when timestamps tie across page boundaries (65.506ms)
+  ✔ sanction audit records the actual decision and rejects malformed expiration (51.9478ms)
+✔ release API delivery boundaries (464.0689ms)
+▶ private Tailscale proxy
+  ✔ accepts the configured tailnet hostname and matching HTTPS origin (4.801ms)
+  ✔ rejects another tailnet hostname (2.5843ms)
+  ✔ serves installable web app assets without a bearer token (6.2515ms)
+  ✔ rejects broad or malformed allowed host configuration (4.3643ms)
+✔ private Tailscale proxy (57.4393ms)
+▶ HTTP chain routing through POST /owner/say (fake providers)
+  ✔ (a) @codex plan @grok critique @codex revise routes root to codex only, then relays in order (3909.8525ms)
+  ✔ (b) repeat submission / retry with the same idempotency_key creates no duplicate visible replies (11983.2838ms)
+  ✔ (c) restart between completion and new work does not re-deliver or re-run (8682.5342ms)
+  ✔ (d) unaddressed broadcast goes to codex+grok only; claude joins only when addressed (232.4256ms)
+  ✔ (e) unknown @names are plain text: no route, no delivery to a nonexistent member (141.0834ms)
+  ✔ (f) repeated mention of one member is a legitimate chain (@codex then @codex) (125.8345ms)
+  ✔ (g) @owner and @codex: root goes to codex, codex runs, reply reaches the owner (2909.6951ms)
+  ✔ (h) @codex draft @owner check @grok ship runs codex then grok; nothing relays into the owner seat (5410.1783ms)
+  ✔ (i) chain beyond the cap: one floor_returned, the next hop never runs, reply returns to the owner (5077.6294ms)
+  ✔ (j) member at the cap answers the owner itself: nothing is cut, so no floor_returned (5973.7613ms)
+✔ HTTP chain routing through POST /owner/say (fake providers) (44455.556ms)
+✔ Claude signed-in usage gives two real windows without exposing the token (10.9212ms)
+✔ expired Claude sign-in and malformed usage fail closed (3.7166ms)
+▶ v0.1 first run (src/council.mjs)
+  ✔ (a) prints exactly one link, the token in it is the owner token, HALT is clear (868.7728ms)
+  ✔ (b) restart on the same home: same owner token, HALT reported as HALTED (2703.5754ms)
+✔ v0.1 first run (src/council.mjs) (3582.5222ms)
+✔ Cursor requires activation, exact executable and explicit model (0.9472ms)
+✔ native Windows coding stays disconnected when containment is unavailable (0.6615ms)
+✔ Cursor patch lane stays in Ask mode even when the Council role is build (0.1219ms)
+✔ Cursor command keeps sandbox and permissions enabled and pins the model (0.109ms)
+✔ Cursor workspace trust is used only for an explicitly approved build in its exact directory (6.3077ms)
+✔ Cursor reports require structured success, not arbitrary stdout (0.1766ms)
+✖ HTTP start → four fake runs → exact owner approval, with no session reuse or relay (10109.0485ms)
+✔ dispatcher parks failure across ticks; owner resume retains peer and performs one retry (10248.307ms)
+✔ HALT prevents start and abandons stalled work permanently (2734.4493ms)
+✖ three-round dispatcher path uses eight runs without conversational caps (16049.1668ms)
+✔ tick claims the checked chamber even when another active chamber's lease expires (3186.1105ms)
+✔ sanction endpoint derives its own hash and member APIs cannot forge engine work (269.6439ms)
+✖ deliberations ignore preseeded provider sessions and never expose peer answers in blind packets (9224.9ms)
+✔ final-line verdict is strict and malformed is conservative (2.1116ms)
+✔ start is idempotent, isolated, budget-gated, and never forges owner prompts (36.3044ms)
+✔ second answer is blind; both must endorse the actual candidate (42.871ms)
+✔ three rounds deadlock after eight replies; first ESCALATE fences peers (62.3929ms)
+✔ fault after reply or advancement rolls back ack and next messages; reopen recovers (56.4476ms)
+✔ stalled work retains a completed peer, resumes only missing work, and HALT includes stalls (62.1134ms)
+✔ approval is exact, owner-scoped, atomic and retry-safe; overrule records replacement (63.1202ms)
+✔ stale lease generation cannot advance a deliberation (29.5917ms)
+✔ external envelopes cannot forge engine keys or claim engine work (26.6539ms)
+✔ concurrent deliberations reserve budget rather than oversubscribing it (27.2015ms)
+✔ resume recovery saves the replacement session and next turn resumes it once (4605.9385ms)
+✔ successful review prose containing not found does not replace a valid session (2653.5241ms)
+✔ Claude resume retry retains its bridge config until the retry completes (3771.5965ms)
+✔ waiting peer deliveries do not starve later owner work (2566.5754ms)
+✔ reply persistence failure leaves its input retryable and never loses the reply (4192.5918ms)
+✖ hardStop never starts a resume fallback after killing an active provider (7971.3958ms)
+✖ HALT never starts a resume fallback after killing an active provider (9796.2817ms)
+▶ P2-6 dispatcher
+  ✔ (a) G1: kill after send before ack five times; restart ends with one accepted transition (2408.5278ms)
+  ✔ (b) mutual-ask fixture terminates within hop cap (2191.8273ms)
+  ✔ (c) HALT stops new spawns within one tick and cancels a running fake (1933.123ms)
+  ✔ (d) session_replaced when fake refuses to resume (2866.6436ms)
+  ✔ (e) three-hop directed @chain terminates at owner (6571.4302ms)
+  ✔ (f) kill mid-run then restart: gen 2, one answered, interrupted marked (7788.124ms)
+  ✔ (g) resume failure via stderr/not-found -> session_replaced, not run_failed (3144.9657ms)
+  ✔ (h) run checkpoint stores redacted stdout/stderr heads (<=2KB) (2811.203ms)
+  ✔ (i) summon does not spend model runs (262.6167ms)
+  ✔ (j) Grok spawns with bridge=none by default (plain-text) (1465.047ms)
+  ✔ (k) non-zero-exit run row carries fake stderr_head text (4563.9807ms)
+  ✔ (l) three-hop chain survives restart between hop 2 and hop 3 (8379.0048ms)
+✔ P2-6 dispatcher (44390.8516ms)
+▶ Floor Say button idempotency (real web/index.html script, fake providers)
+  ✔ (a) a double-click is one submission: one root message, one chain of provider runs (7597.9534ms)
+  ✔ (b) a retry after a network error reuses the same key; new text mints a new one (24.2592ms)
+✔ Floor Say button idempotency (real web/index.html script, fake providers) (7623.5429ms)
+✔ malformed choices/confidence and UNCLEAR always escalate (5.0864ms)
+✔ injected client rejection and timeout return diagnostic uncertainty (15.1908ms)
+✔ quoted and conditional absence abstains, with no client or key (0.5904ms)
+✔ the routing bug is caught for free, with no model call (5.593ms)
+✔ a real critique reads as responsive, also for free (1.2904ms)
+✔ an empty reply is not responsive (0.2231ms)
+✔ no material sent means the judge declines rather than blaming the member (0.1765ms)
+✔ with no client injected, an inconclusive case spends nothing and escalates (0.7ms)
+✔ inconclusive cases go to the typed model exactly once (0.9736ms)
+✔ low confidence escalates instead of acting (0.4927ms)
+✔ a typed verdict still carries what it looked at (0.3881ms)
+✔ the model returns only listed options (0.3995ms)
+✔ stats report how much of the traffic stayed free (0.8766ms)
+✔ overlap ratio behaves (1.2323ms)
+✔ localScreen returns null when it genuinely cannot tell (0.2271ms)
+✔ manual Cursor and Grok readings are labeled and expire after one hour (45.1153ms)
+✔ manual usage write requires owner token (168.2077ms)
+▶ P2-5 MCP bridge
+  ✔ (a) tools/list returns exactly the ten tools plus council_context (1.5165ms)
+  ✔ (b) tool call with bad token gets structured error not a crash (11.5321ms)
+  ✔ (c) 2 MB line is rejected and the bridge keeps serving (133.0912ms)
+  ✔ (d) same operation_id via MCP then again yields one accepted submission (12.693ms)
+✔ P2-5 MCP bridge (270.4126ms)
+▶ P2-2 outbox and leases
+  ✔ (a) two claimers never get the same delivery (877.4273ms)
+  ✔ (b) expired lease re-claimed at gen+1; gen-1 ack refused (44.9221ms)
+  ✔ (c) same idempotency key twice yields one message (29.5244ms)
+  ✔ (d) kill after send before claim loses nothing (972.0949ms)
+  ✔ reply batches and their acknowledgement commit together or roll back together (39.2154ms)
+  ✔ an empty reply batch acknowledges without creating a message (33.0649ms)
+✔ P2-2 outbox and leases (1997.7563ms)
+✔ checked patch changes one text file and records its hash (10763.059ms)
+✔ patch worker rejects path escape, symlink mode and stale context (5185.7721ms)
+✔ an appended traditional diff cannot edit an uninspected protected file (74.2729ms)
+✔ complete patch parsing supports multiple files, context and no-newline markers (7730.1477ms)
+✔ patch parser rejects incomplete hunks and Windows path aliases (47.9117ms)
+✔ patches apply inside an approved Git subdirectory instead of silently skipping it (12077.8207ms)
+✔ finds standalone Codex npm installs without requiring the desktop app (19.833ms)
+✔ finds Claude native and exact named PATH executables, never ambiguous agent (13.4716ms)
+✔ an invalid explicit executable does not fall back silently (10.634ms)
+▶ P2-6 G3 sanctions
+  ✔ hash-bound approval permits only matching content (98.7558ms)
+  ✔ expired, revoked, forged decider, member token all fail closed (34.9572ms)
+✔ P2-6 G3 sanctions (135.274ms)
+✔ seat resolves adapter/account; model can be passed explicitly; owner is never routable (2.382ms)
+✔ token backfill preserves all existing credentials (17.9941ms)
+✔ fable and claude share the same enforced daily ceiling (49.9325ms)
+▶ P2-1 store and record
+  ✔ (a) thrown error inside commit rolls back — no event, no partial rows (40.6693ms)
+  ✔ (b) events chain verifies from seq 1 (33.987ms)
+  ✔ (c) two-process concurrent commit serialize with winner + clean retry (6533.2135ms)
+✔ P2-1 store and record (6609.4709ms)
+✔ GET /owner/usage rejects missing and member tokens (82.2222ms)
+✔ GET /owner/usage returns simulated fixture data for owner (47.3234ms)
+✔ production usage service without fixture flag never reports simulated mode (38.7612ms)
+✔ refresh throttling is enforced server-side (48.6804ms)
+✔ reader handles nested records, large-file tails, dated folders and both windows (17.8289ms)
+✔ cached reset crossing and future timestamps mark readings stale without inventing remaining allowance (2.6703ms)
+✔ normalization derives remaining, preserves labels, and distinguishes zero from unknown (2.6218ms)
+✔ normalization rejects malformed values, clamps valid values, and merges duplicate shared pools (0.9351ms)
+✔ source failures are isolated and preserve last-good readings as stale (1.5557ms)
+✔ fixture mode can never be reported as a live reading (0.7754ms)
+✔ concurrent refreshes are coalesced into one fetch per source (0.4156ms)
+✔ account email, local paths and unknown statuses never reach the response (0.2183ms)
+✔ a failing source backs off instead of being retried on every refresh (0.5304ms)
+✔ ageAccount keeps a fresh reading inside the window (0.1764ms)
+✔ ageAccount marks an aged checkedAt as stale (0.2135ms)
+✔ createUsageService ages cached checkedAt into stale on read (0.5008ms)
+✔ codex local reader is default off (0.3654ms)
+✔ codex local reader extracts only token_count rates from synthetic JSONL (2.2907ms)
+✔ restart pauses an attempted coding run instead of automatically editing twice (141.8229ms)
+✔ work orders pin a junction's physical workspace before owner approval (72.7566ms)
+✔ a missing approved workspace cannot dispatch, accept a reply, or resume (171.944ms)
+✔ a retargeted physical workspace stalls immediately and cannot resume into the replacement (51.7632ms)
+✔ workspace disappearance during a run produces a visible stall on completion (23.8951ms)
+✔ Grok patch eligibility uses the same explicit executable and PATH discovery as dispatch (32.0754ms)
+✔ old Grok implementation queues recover to a visible waiting state (21.6619ms)
+✔ real Cursor routing requires trust for the work order's exact physical workspace (22.4685ms)
+✔ either planner carries conversation through coding, review, and exact owner acceptance (170.0504ms)
+✔ feedback is deduplicated and requires approval of the revised plan (35.9997ms)
+✔ identical plan text in a new revision cannot reuse an old approval (28.137ms)
+✔ HALT cancels undispatched packets and late results cannot resurrect cancelled work (29.2757ms)
+✔ a model change cannot silently dispatch approved coding to another model (25.1553ms)
+✔ HTTP fake Codex worker automatically returns to the chosen planner for review (6094.3903ms)
+✔ fake Grok authors a checked patch and returns to Codex review (14179.3573ms)
+✖ fake Cursor authors a checked patch and returns to Claude review (22819.0477ms)
+✔ Codex plan is exact-approved, implemented by Codex, and returned for review (151.1267ms)
+✔ read-only Grok cannot be dispatched as a coding worker (90.8541ms)
+✔ worker=codex starts implementing after exact plan approval (44.1641ms)
+✔ failures pause without retry storms; Cursor route produces an honest external packet (61.2321ms)
+✔ HTTP delegation runs Claude plan, Codex coding, and Claude review (7815.4316ms)
+ℹ tests 170
+ℹ suites 12
+ℹ pass 164
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 189673.4295
+
+✖ failing tests:
+
+test at test\deliberation-http.test.mjs:29:1
+✖ HTTP start → four fake runs → exact owner approval, with no session reuse or relay (10109.0485ms)
+  Error: condition timed out
+      at until (file:///C:/Users/steam/Apps/obsidian-council-release/test/deliberation-http.test.mjs:13:124)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at listOnTimeout (node:internal/timers:567:9)
+      at process.processTimers (node:internal/timers:541:7)
+      at async TestContext.<anonymous> (file:///C:/Users/steam/Apps/obsidian-council-release/test/deliberation-http.test.mjs:36:13)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+
+test at test\deliberation-http.test.mjs:76:1
+✖ three-round dispatcher path uses eight runs without conversational caps (16049.1668ms)
+  Error: condition timed out
+      at until (file:///C:/Users/steam/Apps/obsidian-council-release/test/deliberation-http.test.mjs:13:124)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at listOnTimeout (node:internal/timers:567:9)
+      at process.processTimers (node:internal/timers:541:7)
+      at async TestContext.<anonymous> (file:///C:/Users/steam/Apps/obsidian-council-release/test/deliberation-http.test.mjs:79:3)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
+
+test at test\deliberation-http.test.mjs:109:1
+✖ deliberations ignore preseeded provider sessions and never expose peer answers in blind packets (9224.9ms)
+  Error: condition timed out
+      at until (file:///C:/Users/steam/Apps/obsidian-council-release/test/deliberation-http.test.mjs:13:124)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at listOnTimeout (node:internal/timers:567:9)
+      at process.processTimers (node:internal/timers:541:7)
+      at async TestContext.<anonymous> (file:///C:/Users/steam/Apps/obsidian-council-release/test/deliberation-http.test.mjs:117:3)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
+
+test at test\dispatcher-recovery.test.mjs:97:43
+✖ hardStop never starts a resume fallback after killing an active provider (7971.3958ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///C:/Users/steam/Apps/obsidian-council-release/test/dispatcher-recovery.test.mjs:105:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\dispatcher-recovery.test.mjs:97:43
+✖ HALT never starts a resume fallback after killing an active provider (9796.2817ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///C:/Users/steam/Apps/obsidian-council-release/test/dispatcher-recovery.test.mjs:105:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\work-orders.test.mjs:241:1
+✖ fake Cursor authors a checked patch and returns to Claude review (22819.0477ms)
+  Error: timeout waiting for awaiting_acceptance
+      at until (file:///C:/Users/steam/Apps/obsidian-council-release/test/work-orders.test.mjs:257:204)
+      at async TestContext.<anonymous> (file:///C:/Users/steam/Apps/obsidian-council-release/test/work-orders.test.mjs:260:7)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)

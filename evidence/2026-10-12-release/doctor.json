@@ -1,0 +1,29 @@
+{
+  "platform": "win32",
+  "node": "26.1.0",
+  "supported": true,
+  "providers": [
+    {
+      "id": "codex",
+      "installed": true,
+      "reason": null
+    },
+    {
+      "id": "claude",
+      "installed": true,
+      "reason": null
+    },
+    {
+      "id": "grok",
+      "installed": true,
+      "reason": null
+    },
+    {
+      "id": "cursor",
+      "installed": false,
+      "reason": "cursor-not-enabled"
+    }
+  ],
+  "ready": true,
+  "authentication": "Not checked. Sign in to each selected CLI before using Council."
+}

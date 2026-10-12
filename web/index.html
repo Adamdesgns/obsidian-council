@@ -69,7 +69,7 @@
     header input { min-width:0!important; width:100%; margin-left:0!important; }
     main { display:flex; flex-direction:column; min-height:auto; }
     #floor { order:1; padding:10px; }
-    #chambers { order:2; }
+    #chambers { order:0; }
     main > aside:last-child { order:3; }
     aside, section { border-right:0; border-bottom:1px solid var(--line); }
     input, button, select { min-height:44px; font-size:16px; }
@@ -88,18 +88,19 @@
 <header>
   <strong>Obsidian Council</strong>
   <span class="pill" id="haltPill">HALT?</span>
-
-  <input id="ownerToken" type="password" placeholder="owner bearer token" style="margin-left:auto;min-width:220px"/>
+  <span id="connectionStatus" role="status">Connecting…</span>
+  <button id="haltToggle">HALT (stop all members)</button>
+  <input id="ownerToken" type="password" aria-label="Private access token" autocomplete="off" placeholder="Private access token" style="margin-left:auto;min-width:220px"/>
 </header>
 <main>
   <aside id="chambers">
     <h2>Chambers</h2>
     <div class="row">
-      <input id="chamberTitle" placeholder="title" style="flex:1"/>
+      <input id="chamberTitle" aria-label="Chamber title" placeholder="Chamber title" style="flex:1;min-width:0"/>
       <button id="createChamber">Create</button>
     </div>
     <div class="row">
-      <select id="chamberSelect" style="flex:1"></select>
+      <select id="chamberSelect" aria-label="Current chamber" style="flex:1;min-width:0"></select>
       <button id="summon">Summon</button>
     </div>
     <ul id="chamberList"></ul>
@@ -118,14 +119,14 @@
       <h2>Delegate work</h2>
       <p>Discuss the work with @codex or @claude. Your chosen planner prepares the plan. After you approve it, the coding lane you choose works in the workspace. The same planner reviews the result, and you decide whether to accept it.</p>
       <p id="workerConnection" role="status">Checking coding connection…</p>
-      <textarea id="workObjective" placeholder="What should be built?"></textarea>
+      <textarea id="workObjective" aria-label="Work objective" placeholder="What should be built?"></textarea>
       <div class="row">
         <label for="workPlanner">Planner</label><select id="workPlanner"><option value="codex">Codex</option><option value="claude">Claude</option></select>
-        <input id="workWorkspace" placeholder="Absolute project or isolated worktree path" style="flex:1"/>
-        <select id="workWorker"><option value="codex">Codex coding lane</option><option value="grok">Grok checked patch lane</option><option value="cursor">Cursor checked patch lane</option></select>
+        <input id="workWorkspace" aria-label="Workspace folder" placeholder="Absolute project or isolated worktree path" style="flex:1"/>
+        <select id="workWorker" aria-label="Coding agent"><option value="codex">Codex coding lane</option><option value="grok">Grok checked patch lane</option><option value="cursor">Cursor checked patch lane</option></select>
         <button id="startWork">Plan this work</button>
       </div>
-      <select id="workSelect" style="width:100%"><option value="">No work orders yet</option></select>
+      <select id="workSelect" aria-label="Work order" style="width:100%"><option value="">No work orders yet</option></select>
       <p id="workStatus" role="status">No work order selected.</p>
       <pre id="workText"></pre>
       <div class="row"><button id="approveWork" disabled>Approve plan and start coding</button><button id="acceptWork" disabled>Accept reviewed work</button><button id="resumeWork" disabled>Resume</button><button id="cancelWork" disabled>Cancel</button></div>
@@ -137,7 +138,7 @@
     <h2>Conversation</h2>
     <div id="log"></div>
     <div id="composer">
-      <input id="say" placeholder="@codex @grok plan…" style="flex:1"/>
+      <input id="say" aria-label="Message to your agents" placeholder="@codex plan this @grok review it" style="flex:1"/>
       <button id="send">Say</button>
       <button id="deliberate">Deliberate</button>
     </div>
@@ -156,8 +157,6 @@
     <p id="decisionError" role="alert"></p>
     <h2 style="margin-top:16px">Members</h2>
     <ul id="members"></ul>
-    <h2 style="margin-top:16px">HALT</h2>
-    <button id="haltToggle">Toggle HALT</button>
     <button id="refresh">Refresh state</button>
   </aside>
 </main>
@@ -169,7 +168,7 @@ let chamberId = localStorage.getItem("council.chamber") || "";
 let es = null;
 
 function token() { return document.getElementById("ownerToken").value.trim() || localStorage.getItem("council.ownerToken") || ""; }
-function saveToken() { localStorage.setItem("council.ownerToken", token()); }
+function saveToken() { localStorage.setItem("council.ownerToken", document.getElementById("ownerToken").value.trim()); refresh(); refreshWork(); refreshDecisions(); loadUsage(false); }
 document.getElementById("ownerToken").addEventListener("change", saveToken);
 // First run: `npm start` prints one link like http://127.0.0.1:4777/#owner=<token>.
 // Take the token out of the URL, remember it in this browser only, then scrub the address bar.
@@ -198,10 +197,7 @@ function line(s) { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scroll
 async function refresh() {
   try {
     const st = await api("/owner/state");
-    document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
-    document.getElementById("haltPill").className = "pill " + (st.halt ? "halt" : "ok");
-    document.getElementById("haltToggle").textContent = st.halt ? "Clear HALT (let members run)" : "HALT (stop all members)";
-    document.getElementById("haltToggle").className = st.halt ? "" : "danger";
+    renderConnection(st);
     const ul = document.getElementById("chamberList");
     ul.innerHTML = "";
     const sel = document.getElementById("chamberSelect");
@@ -222,21 +218,35 @@ async function refresh() {
       li.innerHTML = "<strong>" + m.id + "</strong> <span class='pill'>" + (m.kind || "") + "</span>";
       mu.appendChild(li);
     }
-  } catch (e) { line("state error: " + e.message); }
+  } catch (e) { document.getElementById("connectionStatus").textContent="Disconnected — check your link or access token"; line("state error: " + e.message); }
+}
+
+function renderConnection(st) {
+  document.getElementById("connectionStatus").textContent="Connected";
+  document.getElementById("haltPill").textContent=st.halt?"HALTED":"running";
+  document.getElementById("haltPill").className="pill "+(st.halt?"halt":"ok");
+  document.getElementById("haltToggle").textContent=st.halt?"Clear HALT (let members run)":"HALT (stop all members)";
+  document.getElementById("haltToggle").className=st.halt?"":"danger";
 }
 
 document.getElementById("createChamber").onclick = async () => {
+  const button=document.getElementById("createChamber"); if(button.disabled)return; button.disabled=true;
+  try {
   const title = document.getElementById("chamberTitle").value || "Chamber";
   const r = await api("/owner/chamber", { method: "POST", body: { title } });
   chamberId = r.id; localStorage.setItem("council.chamber", chamberId);
   line("created chamber " + r.id);
   connectFloor();
-  refresh();
+  await refresh(); await pollMessages();
+  } catch(e) { line("Could not create chamber: "+e.message); } finally { button.disabled=false; }
 };
 document.getElementById("summon").onclick = async () => {
+  try {
   chamberId = document.getElementById("chamberSelect").value || chamberId;
+  if(!chamberId){line("Create a chamber first.");return;}
   await api("/owner/summon", { method: "POST", body: { chamber_id: chamberId, members: ["codex","grok"] } });
   line("summoned codex+grok");
+  } catch(e) { line("Could not summon members: "+e.message); }
 };
 // One submission = one idempotency key. The key is minted when a new
 // (chamber, content) pair is first sent and kept until the server accepts it,
@@ -251,6 +261,8 @@ document.getElementById("send").onclick = async () => {
   const content = document.getElementById("say").value;
   chamberId = document.getElementById("chamberSelect").value || chamberId;
   if (!content.trim()) return;
+  if (!chamberId) { line("Create a chamber first."); return; }
+  selectMessageChamber(chamberId);
   if (!saySubmission || saySubmission.chamber !== chamberId || saySubmission.content !== content) {
     saySubmission = { key: "floor:" + crypto.randomUUID(), chamber: chamberId, content };
   }
@@ -272,10 +284,13 @@ document.getElementById("send").onclick = async () => {
   pollMessages();
 };
 document.getElementById("haltToggle").onclick = async () => {
+  const button=document.getElementById("haltToggle");if(button.disabled)return;button.disabled=true;
+  try {
   const st = await api("/owner/state");
   if (st.halt) await api("/owner/halt", { method: "DELETE" });
   else await api("/owner/halt", { method: "POST", body: {} });
-  refresh();
+  await refresh(); await refreshWork();
+  } catch(e) { line("Could not change HALT: "+e.message); } finally {button.disabled=false;}
 };
 document.getElementById("refresh").onclick = async()=>{await refresh();await refreshWork();await refreshDecisions();};
 
@@ -285,32 +300,39 @@ function connectFloor() {
   // Authenticated polling below is used; EventSource cannot carry the bearer token.
 }
 // Poll the chamber's messages; render every reply from every seat.
-let lastSeen = "";
+let messageCursor = 0, displayedChamber = "", messagesBusy = false;
 const seen = new Set();
+function selectMessageChamber(cid) {
+  if (cid === displayedChamber) return;
+  chamberId=cid;displayedChamber=cid;messageCursor=0;seen.clear();logEl.textContent="";
+  localStorage.setItem("council.chamber",cid);
+}
 async function pollMessages() {
-  if (!token()) return;
+  if (!token() || messagesBusy) return;
   const cid = document.getElementById("chamberSelect").value || chamberId;
   if (!cid) return;
-  if (cid !== chamberId) { chamberId = cid; lastSeen = ""; seen.clear(); logEl.textContent = ""; }
+  selectMessageChamber(cid);
+  messagesBusy=true;
   try {
-    const r = await api("/owner/messages?chamber_id=" + encodeURIComponent(cid) + "&after=" + encodeURIComponent(lastSeen));
+    const r = await api("/owner/messages?chamber_id=" + encodeURIComponent(cid) + "&cursor=" + messageCursor);
+    if ((document.getElementById("chamberSelect").value || chamberId) !== cid) return;
     for (const m of r.messages || []) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
-      lastSeen = m.created;
       if (m.sender === "engine") continue;
       const who = m.sender === "owner" ? "you" : m.sender;
       const t = m.created.slice(11, 19) + "Z";
       line(`[${t}] ${who} (${m.kind}):\n${m.content}\n`);
     }
-  } catch (e) { line("messages error: " + e.message); }
+    if(Number.isSafeInteger(r.cursor)) messageCursor=r.cursor;
+  } catch (e) { line("messages error: " + e.message); } finally { messagesBusy=false; }
 }
 setInterval(async () => {
   if (!token()) return;
   try {
     const st = await api("/owner/state");
-    document.getElementById("haltPill").textContent = st.halt ? "HALTED" : "running";
-  } catch {}
+    renderConnection(st);
+  } catch {document.getElementById("connectionStatus").textContent="Disconnected — retrying";}
   await pollMessages();
   await refreshWork();
   await refreshDecisions();
@@ -327,6 +349,7 @@ function renderWork(){
     ...(row.result?["BUILD REPORT",row.result]:[]),...(row.review?["PLANNER REVIEW",row.review]:[]),...(row.handoff?["WORKER PACKET",row.handoff]:[]),...(row.stall_detail?["PAUSED",row.stall_detail]:[])]:[];
   document.getElementById("workText").textContent=parts.join("\n\n");
   document.getElementById("approveWork").disabled=workBusy||row?.state!=="awaiting_approval";
+  document.getElementById("startWork").disabled=workBusy;
   document.getElementById("acceptWork").disabled=workBusy||row?.state!=="awaiting_acceptance";
   document.getElementById("reviseWork").disabled=workBusy||!["awaiting_approval","awaiting_acceptance","handoff_ready","waiting_worker"].includes(row?.state);
   document.getElementById("resumeWork").disabled=workBusy||row?.state!=="stalled";

@@ -1,9 +1,9 @@
-import {existsSync, statSync} from "node:fs";
-import {isAbsolute, resolve, join} from "node:path";
-import {homedir} from "node:os";
+import {existsSync, statSync, realpathSync} from "node:fs";
+import {isAbsolute, resolve} from "node:path";
 import {contentHash} from "./sanctions.mjs";
 import {seatOf} from "./seats.mjs";
-import {connection as cursorConnection} from "./adapters/cursor.mjs";
+import {connection as cursorConnection, trustsWorkspace} from "./adapters/cursor.mjs";
+import {resolveCli} from "./adapters/resolve-cli.mjs";
 
 const ACTIVE=["planning","specialist","implementing","reviewing"];
 const TERMINAL=["completed","cancelled"];
@@ -17,18 +17,17 @@ export function grokPatchConnection(env=process.env) {
   if (env.COUNCIL_GROK_PATCH_ENABLED!=="1") return {ok:false,reason:"grok-patch-not-enabled"};
   const model=env.COUNCIL_GROK_MODEL||"";
   if (!model || model==="auto") return {ok:false,reason:"grok-model-required"};
-  const exe=join(env.USERPROFILE||homedir(),".grok","bin","grok.exe");
-  if (!existsSync(exe)) return {ok:false,reason:"grok-cli-required"};
+  if (!resolveCli("grok",{},env).found) return {ok:false,reason:"grok-cli-required"};
   return {ok:true,worker:"grok",model,mode:"checked-patch"};
 }
 
-export function resolveImplementWorker(worker,model) {
+export function resolveImplementWorker(worker,model,workspace) {
   const selected = String(worker || "").toLowerCase();
   if (!selected) return { ok: false, wait: true, reason: "no-worker-selected" };
   if (selected === "cursor") {
     const c=cursorConnection(process.env,{patchOnly:true});
     if(!c.ok)return {...c,wait:true,selected};
-    if(process.env.COUNCIL_TEST_ONLY!=="1"&&process.env.COUNCIL_CURSOR_TRUST_APPROVED!=="1")return {ok:false,wait:true,reason:"cursor-workspace-trust-required",selected};
+    if(process.env.COUNCIL_TEST_ONLY!=="1"&&!trustsWorkspace(workspace??process.env.COUNCIL_CURSOR_TRUST_WORKSPACE))return {ok:false,wait:true,reason:"cursor-workspace-trust-required",selected};
     if(model!==c.model)return {ok:false,wait:true,reason:"cursor-model-changed",selected};
     return {ok:true,worker:"cursor",model,mode:"checked-patch"};
   }
@@ -61,7 +60,21 @@ function enterWaitingWorker(api, row, reason, selected) {
 function validWorkspace(value){
   if(typeof value!=="string"||!value.trim()||!isAbsolute(value))return null;
   const path=resolve(value.trim());
-  try{return existsSync(path)&&statSync(path).isDirectory()?path:null;}catch{return null;}
+  try{return existsSync(path)&&statSync(path).isDirectory()?realpathSync(path):null;}catch{return null;}
+}
+
+function workspaceUnchanged(row){return validWorkspace(row.workspace)===row.workspace;}
+
+function stallChangedWorkspace(api,row,messageId){
+  const phase=phaseOf(row);
+  update(api,row,{state:"stalled",resume_state:phase,stall_detail:JSON.stringify({reason:"workspace_changed",message:"The approved workspace is missing or points somewhere else. Restore the original directory before choosing Resume."})});
+  api.prepare("UPDATE deliveries SET status='pending',attempt_gen=attempt_gen+1,lease_until=NULL,updated=? WHERE message_id=? AND status IN ('pending','leased')")
+    .run(api.nowIso(),messageId);
+  api.setRef("work_orders",row.id,{state:"stalled",phase,reason:"workspace_changed"});
+}
+
+function approvalHash(row,plan){
+  return contentHash(JSON.stringify({revision:row.revision,workspace:row.workspace,worker:row.worker,model:row.worker_model,objective:row.objective,plan}));
 }
 
 function update(api,row,patch){
@@ -153,8 +166,13 @@ export function workTaskFor(store,messageId){
 export function canDispatchWork(store,messageId,member){
   const task=workTaskFor(store,messageId);if(!task)return false;
   const row=store.prepare("SELECT * FROM work_orders WHERE id=?").get(task.work_order_id);
-  if(task.phase==="implementing"&&!resolveImplementWorker(row.worker,row.worker_model).ok)return false;
-  return ACTIVE.includes(row.state)&&task.member===member&&task.response==null&&phaseOf(row)===task.phase;
+  if(!ACTIVE.includes(row.state)||task.member!==member||task.response!=null||phaseOf(row)!==task.phase)return false;
+  if(!workspaceUnchanged(row)){
+    store.commit("work_workspace_changed","engine",api=>stallChangedWorkspace(api,row,messageId));
+    return false;
+  }
+  if(task.phase==="implementing"&&!resolveImplementWorker(row.worker,row.worker_model,row.workspace).ok)return false;
+  return true;
 }
 
 export function completeWorkReply(store,{message,delivery,gen,member,text}){
@@ -164,13 +182,17 @@ export function completeWorkReply(store,{message,delivery,gen,member,text}){
     const lease=api.prepare("SELECT * FROM deliveries WHERE id=?").get(delivery.id);
     if(!row||!ACTIVE.includes(row.state)||task.member!==member||task.response!=null||phaseOf(row)!==task.phase||lease?.attempt_gen!==gen||lease?.status!=="leased"||lease?.message_id!==message.id||lease?.recipient!==member)
       return {ok:false,reason:"stale_work_result"};
-    if(task.phase==="implementing"&&!resolveImplementWorker(row.worker,row.worker_model).ok)return {ok:false,reason:"worker_not_writable"};
+    if(!workspaceUnchanged(row)){
+      stallChangedWorkspace(api,row,message.id);
+      return {ok:false,reason:"workspace_changed"};
+    }
+    if(task.phase==="implementing"&&!resolveImplementWorker(row.worker,row.worker_model,row.workspace).ok)return {ok:false,reason:"worker_not_writable"};
     api.prepare("UPDATE deliveries SET status='answered',lease_until=NULL,updated=? WHERE id=?").run(api.nowIso(),delivery.id);
     api.prepare("UPDATE work_order_messages SET response=? WHERE message_id=?").run(text,message.id);
-    if(task.phase==="planning")update(api,row,{plan:text,plan_hash:contentHash(text),state:"awaiting_approval"});
+    if(task.phase==="planning")update(api,row,{plan:text,plan_hash:approvalHash(row,text),state:"awaiting_approval"});
     else if(task.phase==="specialist"){
       update(api,row,{specialist_output:text});
-      const routed=resolveImplementWorker(row.worker,row.worker_model);
+      const routed=resolveImplementWorker(row.worker,row.worker_model,row.workspace);
       if(!routed.ok){
         enterWaitingWorker(api,row,routed.reason,routed.selected);
       }else{
@@ -191,7 +213,8 @@ export function approveWorkPlan(store,id,{plan_hash}){
     if(!row)return {ok:false,reason:"not_found"};
     if(row.state!=="awaiting_approval")return {ok:false,reason:"not_awaiting_approval"};
     if(row.plan_hash!==plan_hash)return {ok:false,reason:"stale_plan"};
-    const routed=resolveImplementWorker(row.worker,row.worker_model);
+    if(!workspaceUnchanged(row))return {ok:false,reason:"workspace_changed"};
+    const routed=resolveImplementWorker(row.worker,row.worker_model,row.workspace);
     if(!routed.ok){
       enterWaitingWorker(api,row,routed.reason,routed.selected);
     }else{
@@ -219,6 +242,7 @@ export function resumeWork(store,id){
   return store.commit("work_order_resumed","owner",api=>{
     const row=api.prepare("SELECT * FROM work_orders WHERE id=?").get(id);
     if(!row||row.state!=="stalled")return {ok:false,reason:"not_stalled"};
+    if(!workspaceUnchanged(row))return {ok:false,reason:"workspace_changed"};
     update(api,row,{state:row.resume_state,resume_state:null,stall_detail:null});
     api.setRef("work_orders",id,{state:row.state});return {ok:true,state:row.state};
   }).result;
@@ -274,7 +298,7 @@ export function readWorkOrder(store,id){
 // Fence its delivery before the dispatcher can spend a run on a read-only worker.
 export function recoverUnsupportedWork(store){
   for(const saved of store.prepare("SELECT * FROM work_orders WHERE state='implementing' OR (state='stalled' AND resume_state='implementing')").all()){
-    const route=resolveImplementWorker(saved.worker,saved.worker_model);
+    const route=workspaceUnchanged(saved)?resolveImplementWorker(saved.worker,saved.worker_model,saved.workspace):{ok:false,reason:"workspace_changed",selected:saved.worker};
     if(route.ok){
       const attempted=store.prepare("SELECT d.id FROM deliveries d JOIN work_order_messages wm ON wm.message_id=d.message_id WHERE wm.work_order_id=? AND wm.phase='implementing' AND wm.response IS NULL AND d.attempt_gen>0 LIMIT 1").get(saved.id);
       if(saved.state==="implementing"&&attempted)store.commit("work_interrupted","engine",api=>{

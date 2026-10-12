@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-12T21:48:04.265Z",
+  "providerMode": "simulated",
+  "checks": [
+    "desktop: private link is scrubbed",
+    "desktop: directed conversation completes",
+    "desktop: plan waits for approval",
+    "desktop: plan, revision, coding, review and acceptance",
+    "desktop: HALT survives reload and can be cleared",
+    "desktop: mobile-safe page width",
+    "desktop: changing chambers clears old replies",
+    "phone: private link is scrubbed",
+    "phone: directed conversation completes",
+    "phone: plan waits for approval",
+    "phone: plan, revision, coding, review and acceptance",
+    "phone: HALT survives reload and can be cleared",
+    "phone: mobile-safe page width",
+    "phone: changing chambers clears old replies"
+  ],
+  "screenshots": [
+    "desktop-fixture.png",
+    "phone-fixture.png"
+  ],
+  "consoleErrors": [],
+  "passed": true
+}

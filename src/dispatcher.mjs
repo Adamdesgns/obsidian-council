@@ -105,9 +105,13 @@ export function createDispatcher(opts = {}) {
     if (refuseOnce) return true;
     if (result && result.exit !== 0 && result.exit != null) return true;
     const err = String(result?.stderr || "");
-    const out = String(result?.stdout || "");
     const re = /not found|already in use|Error: Failed|cannot resume|refuse_resume/i;
-    if (re.test(err) || re.test(out)) return true;
+    if (re.test(err)) return true;
+    // Successful answers can discuss missing files. Only provider error
+    // records may turn prose on stdout into a session-recovery signal.
+    if (parseJsonObjects(result?.stdout).some(event =>
+      (event?.type === "error" || event?.is_error === true ||
+        String(event?.subtype || "").startsWith("error")) && re.test(JSON.stringify(event)))) return true;
     return false;
   }
 
@@ -196,9 +200,8 @@ export function createDispatcher(opts = {}) {
          WHERE d.recipient = ? AND (
            d.status = 'pending'
            OR (d.status = 'leased' AND d.lease_until IS NOT NULL AND d.lease_until < ?)
-           OR d.status = 'waiting'
          )
-         ORDER BY d.id ASC LIMIT 5`
+         ORDER BY d.id ASC`
       ).all(member, new Date().toISOString());
 
       for (const row of pending) {
@@ -207,7 +210,6 @@ export function createDispatcher(opts = {}) {
         if (engineTask && !canDispatch(store, row.message_id, member)) continue;
         if (workTask && !canDispatchWork(store, row.message_id, member)) continue;
         const managedTask = engineTask || workTask;
-        if (row.status === "waiting") continue; // waiting for peer answer
         const chamber = row.chamber_id || "_";
         const key = activeKey(member, chamber);
         if (active.has(key)) continue;
@@ -302,8 +304,8 @@ export function createDispatcher(opts = {}) {
       persist: !engineTask && !resume,
       newId: member === "grok" && !resume ? crypto.randomUUID() : null,
       role: workTask?.phase === "implementing" ? "build" : "review",
-      trustApproved: member === "cursor" && workTask?.phase === "implementing" && !!workTask.plan_hash && process.env.COUNCIL_CURSOR_TRUST_APPROVED === "1",
-      model: workTask?.worker_model,
+      trustApproved: member === "cursor" && workTask?.phase === "implementing" && !!workTask.plan_hash && cursorAd.trustsWorkspace(cwd),
+      model: workTask?.phase === "implementing" ? workTask.worker_model : undefined,
       maxTurns: workTask ? 12 : undefined,
       memberToken: managedTask ? null : tokens[member],
       cwd,
@@ -345,71 +347,80 @@ export function createDispatcher(opts = {}) {
     }
 
     let result;
-    try {
-      result = await spawnMember(store, member, packet, spawnOpts);
-    } catch (e) {
-      result = { refused: String(e), exit: null, stdout: "", stderr: String(e) };
-    }
-
     let bridgeStatus = bridge.bridge;
-    try { bridge.cleanup(); } catch { /* */ }
-    noteRun(result, bridgeStatus);
+    try {
+      try {
+        result = await spawnMember(store, member, packet, spawnOpts);
+      } catch (e) {
+        result = { refused: String(e), exit: null, stdout: "", stderr: String(e) };
+      }
+      // Killing a resumed process also produces a nonzero exit. A stop is not
+      // permission to recover its session by starting another provider.
+      if (stopped || isHalted()) return;
 
-    // P2-6d item 2: resume failure -> session_replaced -> retry once without resume (not run_failed).
-    if (isResumeFailure(result, resume, opts.refuseResumeOnce && resume)) {
-      resumeFailed = true;
-      store.commit("session_replaced", member, (api) => {
-        api.prepare(
-          `INSERT INTO sessions(member, chamber_id, provider_session_id, lease_gen, resume_kind, updated)
-           VALUES(?,?,?,?,?,?)
-           ON CONFLICT(member, chamber_id) DO UPDATE SET
-             provider_session_id=excluded.provider_session_id,
-             resume_kind='replaced',
-             updated=excluded.updated`
-        ).run(member, chamber === "_" ? "" : chamber, "new-" + Date.now(), 0, "replaced", api.nowIso());
-        api.setRef("sessions", member, { chamber, old: resume, reason: "resume_failed" });
-      });
-      // Retry once without resume
-      result = await spawnMember(store, member, packet, {
-        ...spawnOpts,
-        resume: null,
-        persist: true,
-        newId: member === "grok" ? crypto.randomUUID() : null,
-        env: { ...(opts.env || {}), ...(opts.retryEnv || {}), ...(bridge.env || {}) },
-        extraArgs: bridge.extraArgs || [],
-      });
       noteRun(result, bridgeStatus);
-      stampBridgeAll(bridgeStatus);
-    }
 
-    let mixedBridgeFallback = false;
-    // P2-6d item 5 / P2-6e: if a project bridge was used and failed, retry bridge=none; stamp every run row.
-    if (
-      member === "grok" &&
-      bridgeStatus === "grok-project-config" &&
-      !resumeFailed &&
-      classifyRunFailure(result)
-    ) {
-      removeGrokBridgeConfig(cwd);
-      // Keep the failed row explaining it used the project bridge; then fall back.
-      stampBridgeAll("grok-project-config");
-      bridgeStatus = "none";
-      bridge = noneBridge();
-      packet = buildPacket({ member, chamber, message: msgPayload, plainText: true });
-      result = await spawnMember(store, member, packet, {
-        ...spawnOpts,
-        resume: null,
-        persist: true,
-        newId: crypto.randomUUID(),
-        env: { ...(opts.env || {}), ...(opts.retryEnv || {}) },
-        extraArgs: [],
-      });
-      noteRun(result, bridgeStatus);
-      mixedBridgeFallback = true;
-    }
+      // P2-6d item 2: resume failure -> session_replaced -> retry once without resume (not run_failed).
+      if (isResumeFailure(result, resume, opts.refuseResumeOnce && resume)) {
+        resumeFailed = true;
+        store.commit("session_replaced", member, (api) => {
+          api.prepare(
+            `INSERT INTO sessions(member, chamber_id, provider_session_id, lease_gen, resume_kind, updated)
+             VALUES(?,?,?,?,?,?)
+             ON CONFLICT(member, chamber_id) DO UPDATE SET
+               provider_session_id=excluded.provider_session_id,
+               resume_kind='replaced',
+               updated=excluded.updated`
+          ).run(member, chamber === "_" ? "" : chamber, null, 0, "replaced", api.nowIso());
+          api.setRef("sessions", member, { chamber, old: resume, reason: "resume_failed" });
+        });
+        // Retry once without resume
+        spawnOpts.newId = adapterId === "grok" ? crypto.randomUUID() : null;
+        result = await spawnMember(store, member, packet, {
+          ...spawnOpts,
+          resume: null,
+          persist: true,
+          newId: spawnOpts.newId,
+          env: { ...(opts.env || {}), ...(opts.retryEnv || {}), ...(bridge.env || {}) },
+          extraArgs: bridge.extraArgs || [],
+        });
+        if (stopped || isHalted()) return;
+        noteRun(result, bridgeStatus);
+        stampBridgeAll(bridgeStatus);
+      }
 
-    // P2-6e item 3: stamp bridge on every run of this spawn path (skip when mixed statuses already set).
-    if (!mixedBridgeFallback) stampBridgeAll(bridgeStatus);
+      let mixedBridgeFallback = false;
+      // P2-6d item 5 / P2-6e: if a project bridge was used and failed, retry bridge=none; stamp every run row.
+      if (
+        member === "grok" &&
+        bridgeStatus === "grok-project-config" &&
+        !resumeFailed &&
+        classifyRunFailure(result)
+      ) {
+        removeGrokBridgeConfig(cwd);
+        // Keep the failed row explaining it used the project bridge; then fall back.
+        stampBridgeAll("grok-project-config");
+        bridgeStatus = "none";
+        bridge = noneBridge();
+        packet = buildPacket({ member, chamber, message: msgPayload, plainText: true });
+        result = await spawnMember(store, member, packet, {
+          ...spawnOpts,
+          resume: null,
+          persist: true,
+          newId: crypto.randomUUID(),
+          env: { ...(opts.env || {}), ...(opts.retryEnv || {}) },
+          extraArgs: [],
+        });
+        if (stopped || isHalted()) return;
+        noteRun(result, bridgeStatus);
+        mixedBridgeFallback = true;
+      }
+
+      // P2-6e item 3: stamp bridge on every run of this spawn path (skip when mixed statuses already set).
+      if (!mixedBridgeFallback) stampBridgeAll(bridgeStatus);
+    } finally {
+      try { bridge.cleanup(); } catch { /* */ }
+    }
 
     const ad = ADAPTERS[adapterId];
     let text = "";
@@ -474,12 +485,14 @@ export function createDispatcher(opts = {}) {
       return;
     }
 
-    // Ack this delivery as answered (success only)
-    const ack = outbox.ack(delivery, gen, { actor: member, status: "answered" });
-    if (!ack.ok) {
+    // A stop/restart can fence this result while its provider is exiting.
+    const currentDelivery = store.prepare("SELECT status, attempt_gen FROM deliveries WHERE id=?").get(delivery.id);
+    if (currentDelivery?.status !== "leased" || currentDelivery.attempt_gen !== gen) {
       setPresence(member, "idle");
       return;
     }
+    const replyEnvelopes = [];
+    let responseStatus = "answered";
 
     // Record session if present
     const sid =
@@ -487,20 +500,21 @@ export function createDispatcher(opts = {}) {
       (result.stdout.match(/"session_id"\s*:\s*"([^"]+)"/) || [])[1] ||
       (result.stdout.match(/"sessionId"\s*:\s*"([^"]+)"/) || [])[1] ||
       spawnOpts.newId;
-    if (sid && !resumeFailed) {
+    if (sid) {
       store.commit("session_recorded", member, (api) => {
         api.prepare(
           `INSERT INTO sessions(member, chamber_id, provider_session_id, lease_gen, resume_kind, updated)
            VALUES(?,?,?,?,?,?)
            ON CONFLICT(member, chamber_id) DO UPDATE SET
              provider_session_id=excluded.provider_session_id,
+             resume_kind=excluded.resume_kind,
              updated=excluded.updated`
-        ).run(member, chamber === "_" ? "" : chamber, sid, 0, resume ? "resumed" : "created", api.nowIso());
+        ).run(member, chamber === "_" ? "" : chamber, sid, 0, resumeFailed ? "replaced" : resume ? "resumed" : "created", api.nowIso());
         api.setRef("sessions", member, { chamber, sid });
       });
     }
 
-    for (const out of outbound) {
+    for (const [outIndex, out] of outbound.entries()) {
       let recipients = out.recipients || (out.recipient ? [out.recipient] : ["owner"]);
       const memberDirected = recipients.some((r) => r && r !== "owner");
       // Hop cap at send time: at the cap, return to the floor instead of
@@ -515,25 +529,20 @@ export function createDispatcher(opts = {}) {
         hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
         // checkpoint waiting if asking another member
         if (out.recipient && out.recipient !== "owner") {
-          store.commit("delivery_waiting", member, (api) => {
-            api.prepare(
-              `UPDATE deliveries SET status='waiting', updated=? WHERE id=?`
-            ).run(api.nowIso(), delivery.id);
-            api.setRef("deliveries", delivery.id, { waiting_for: out.recipient });
-          });
+          responseStatus = "waiting";
         }
       }
       if (message.sender !== "owner") {
         autoReplies.set(chamber, (autoReplies.get(chamber) || 0) + 1);
       }
-      outbox.send({
+      replyEnvelopes.push({
         sender: member,
         recipients,
         chamber_id: chamber === "_" ? null : chamber,
         kind: out.kind || "respond",
         content: out.content || result.stdout.slice(0, 2000),
         parent_id: message.id,
-        idempotency_key: out.idempotency_key || `disp:${member}:${message.id}:${out.kind || "respond"}:${Date.now()}`,
+        idempotency_key: `disp:${member}:${message.id}:${out.kind || "respond"}:${gen}:${outIndex}`,
       });
     }
 
@@ -594,7 +603,7 @@ export function createDispatcher(opts = {}) {
       }
       const recipients = chainNext ? [chainNext] : ["owner"];
       if (chainNext) hopCount.set(chamber, (hopCount.get(chamber) || 0) + 1);
-      outbox.send({
+      replyEnvelopes.push({
         sender: member,
         recipients,
         chamber_id: chamber === "_" ? null : chamber,
@@ -606,6 +615,9 @@ export function createDispatcher(opts = {}) {
       });
     }
 
+    // Store every produced reply and acknowledge its input in one transaction.
+    // A crash cannot leave an answered input whose reply was never persisted.
+    outbox.respond(delivery.id, gen, {actor: member, status: responseStatus}, replyEnvelopes);
     setPresence(member, "idle");
   }
 

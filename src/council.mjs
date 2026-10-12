@@ -26,7 +26,15 @@ export async function startCouncil(opts = {}) {
 
   const limits=opts.limits || loadLimits();
   const api = createApi({ home, config, limits, usageService: opts.usageService, usageFixture: opts.usageFixture });
-  const bound = await api.listen();
+  let bound;
+  try {
+    bound = await api.listen();
+  } catch (error) {
+    // A failed bind still owns a SQLite connection and token/store resources.
+    // Release them before returning the startup error to the launcher.
+    await api.close();
+    throw error;
+  }
   const port = api.server.address().port;
   const base = `http://${bound.host}:${port}`;
   const publicBase = String(opts.publicUrl || process.env.COUNCIL_PUBLIC_URL || base).replace(/\/$/, "");
@@ -67,7 +75,7 @@ export async function startCouncil(opts = {}) {
   async function close() {
     if (closing) return;
     closing = true;
-    dispatcher.stop();
+    dispatcher.hardStop();
     try { await dispatcher.close(); } catch { /* */ }
     try { await api.close(); } catch { /* */ }
   }

@@ -14,7 +14,7 @@ import { contentHash } from "./sanctions.mjs";
 import { loadLimits } from "./adapters/spawn.mjs";
 import { startDeliberation, readDeliberation, resumeStalled, decide, abandon, haltDeliberations, taskFor } from "./deliberation.mjs";
 import { createUsageService } from "./usage/service.mjs";
-import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders,acceptWork,reviseWork,resolveImplementWorker,grokPatchConnection} from "./work-orders.mjs";
+import {startWorkOrder,readWorkOrder,approveWorkPlan,resumeWork,cancelWork,haltWorkOrders,acceptWork,reviseWork,resolveImplementWorker,grokPatchConnection,workTaskFor} from "./work-orders.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_CONFIG = { host: "127.0.0.1", port: 4777, lease_ms: 60_000 };
 const LOOPBACK_NAMES = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -141,6 +141,9 @@ export function createApi(opts = {}) {
 
   function stampSender(identity, body) {
     const b = body && typeof body === "object" ? { ...body } : {};
+    if (["chain", "chain_hop", "advance_chain"].some((key) => Object.hasOwn(b, key))) {
+      throw Object.assign(new Error("chain_control_reserved"), { statusCode: 400 });
+    }
     if (b.sender != null && String(b.sender) !== identity.member) {
       recordSpoof(identity, b.sender);
     }
@@ -283,22 +286,20 @@ export function createApi(opts = {}) {
       const body = stampSender(identity, await readBody(req));
       if (body.delivery_id != null && body.gen != null) {
         const delivery = store.prepare("SELECT * FROM deliveries WHERE id=?").get(body.delivery_id);
-        if (!delivery || delivery.recipient !== member || taskFor(store, delivery.message_id)) return sendJson(res,403,{error:"delivery_not_owned_or_engine_managed"});
-        const ack = outbox.ack(body.delivery_id, body.gen, {
-          actor: member,
-          status: body.status || "acked",
-        });
-        if (body.content || body.recipients || body.recipient) {
-          const r = outbox.send({
+        if (!delivery || delivery.recipient !== member || taskFor(store, delivery.message_id) || workTaskFor(store, delivery.message_id)) return sendJson(res,403,{error:"delivery_not_owned_or_engine_managed"});
+        if (body.status != null && !["acked", "answered"].includes(body.status)) return sendJson(res,400,{error:"invalid_response_status"});
+        const original = store.prepare("SELECT chamber_id FROM messages WHERE id=?").get(delivery.message_id);
+        const envelope = body.content || body.recipients || body.recipient ? {
             ...body,
+            chamber_id: original.chamber_id,
+            parent_id: delivery.message_id,
             sender: member,
             kind: body.kind || "respond",
             recipients: body.recipients || (body.recipient ? [body.recipient] : ["owner"]),
-            idempotency_key: body.idempotency_key || `respond:${member}:${body.delivery_id}:${body.gen}`,
-          });
-          return sendJson(res, 200, { ack, sent: r });
-        }
-        return sendJson(res, 200, { ack });
+            idempotency_key: `respond:${member}:${body.delivery_id}:${body.gen}`,
+          } : null;
+        const result = outbox.respond(delivery.id, body.gen, { actor: member, status: body.status || "acked" }, envelope);
+        return sendJson(res, result.ack.ok ? 200 : 409, { ...result, error: result.ack.ok ? undefined : result.ack.reason });
       }
       const r = outbox.send({
         ...body,
@@ -470,6 +471,9 @@ export function createApi(opts = {}) {
     if (req.method === "POST" && path === "/owner/sanction") {
       const body = await readBody(req);
       if (typeof body.content !== "string" || !body.content.trim()) return sendJson(res,400,{error:"content_required"});
+      const decisionStatus = body.status || (body.approve === false ? "rejected" : "approved");
+      if (!["approved", "rejected", "revoked"].includes(decisionStatus)) return sendJson(res,400,{error:"invalid_sanction_status"});
+      if (body.expires_at != null && (typeof body.expires_at !== "string" || !Number.isFinite(Date.parse(body.expires_at)))) return sendJson(res,400,{error:"invalid_sanction_expiry"});
       const serverHash=contentHash(body.content);
       const committed = store.commit("sanction_decided", "owner", (api) => {
         const id = body.id || api.uuid();
@@ -485,9 +489,9 @@ export function createApi(opts = {}) {
           api.nowIso(),
           body.expires_at ?? null,
           null,
-          body.status || (body.approve === false ? "rejected" : "approved")
+          decisionStatus
         );
-        api.setRef("sanctions", id, { content_hash: serverHash, status: body.status || "approved" });
+        api.setRef("sanctions", id, { content_hash: serverHash, status: decisionStatus });
         return { id };
       });
       return sendJson(res, 200, committed.result);
@@ -533,6 +537,21 @@ export function createApi(opts = {}) {
 
     if (req.method === "GET" && path === "/owner/messages") {
       const chamberId = url.searchParams.get("chamber_id");
+      if (url.searchParams.has("cursor")) {
+        const raw = url.searchParams.get("cursor");
+        const cursor = Number(raw);
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(cursor)) return sendJson(res, 400, { error: "invalid_message_cursor" });
+        const rows = chamberId
+          ? store.prepare(
+              `SELECT rowid AS sequence, id, kind, sender, content, created FROM messages
+               WHERE chamber_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT 200`
+            ).all(chamberId, cursor)
+          : store.prepare(
+              `SELECT rowid AS sequence, id, kind, sender, content, chamber_id, created FROM messages
+               WHERE rowid > ? ORDER BY rowid ASC LIMIT 200`
+            ).all(cursor);
+        return sendJson(res, 200, { messages: rows, cursor: rows.at(-1)?.sequence ?? cursor });
+      }
       const after = url.searchParams.get("after") || "";
       const rows = chamberId
         ? store.prepare(
@@ -553,7 +572,7 @@ export function createApi(opts = {}) {
         members: store.prepare("SELECT * FROM members").all(),
         events: store.verifyChain(),
         deliveries_pending: store.prepare(
-          "SELECT COUNT(*) AS c FROM deliveries WHERE status IN ('pending','leased','waiting')"
+          "SELECT COUNT(*) AS c FROM deliveries WHERE recipient <> 'owner' AND status IN ('pending','leased','waiting')"
         ).get().c,
       });
     }

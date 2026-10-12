@@ -1,6 +1,6 @@
 // src/adapters/spawn.mjs — the one place a member process is started.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -8,6 +8,7 @@ import * as claude from "./claude.mjs";
 import * as codex from "./codex.mjs";
 import * as grok from "./grok.mjs";
 import * as cursor from "./cursor.mjs";
+import { resolveCli } from "./resolve-cli.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 import { seatOf, allSeats, accountOf } from "../seats.mjs";
@@ -18,6 +19,7 @@ const KEEP = [
   "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH",
   "ComSpec", "PATHEXT", "USERNAME", "ProgramFiles", "ProgramFiles(x86)",
   "ProgramData", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS", "PUBLIC",
+  "CODEX_HOME", "CLAUDE_CONFIG_DIR",
 ];
 
 export function minEnv(extra = {}) {
@@ -58,46 +60,6 @@ export function killTree(pid) {
 export function loadLimits() {
   const p = join(ROOT, "config", "limits.json");
   return JSON.parse(readFileSync(p, "utf8"));
-}
-
-function resolveCli(member, opts = {}) {
-  if (opts.exe) return { exe: opts.exe, prefix: opts.prefix || [], found: true };
-  if (member === "fake" || opts.fakePath) {
-    return {
-      exe: process.execPath,
-      prefix: [opts.fakePath],
-      found: true,
-      fake: true,
-    };
-  }
-  if(member==="cursor"){const c=cursor.connection(process.env,{patchOnly:opts.role==="build"});return c.ok?{exe:c.exe,prefix:c.prefix,found:true}:{found:false};}
-  const HOME = process.env.USERPROFILE || process.env.HOME || "";
-  const APPDATA = process.env.APPDATA || join(HOME, "AppData", "Roaming");
-  const LOCALAPPDATA = process.env.LOCALAPPDATA || join(HOME, "AppData", "Local");
-  if (member === "claude") {
-    const exe = join(APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
-    const cli = join(APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-    if (existsSync(exe)) return { exe, prefix: [], found: true };
-    if (existsSync(cli)) return { exe: process.execPath, prefix: [cli], found: true };
-    return { found: false };
-  }
-  if (member === "codex") {
-    const bin = join(LOCALAPPDATA, "OpenAI", "Codex", "bin");
-    if (existsSync(bin)) {
-      const cands = readdirSync(bin)
-        .map((d) => join(bin, d, "codex.exe"))
-        .filter(existsSync)
-        .map((p) => ({ p, m: statSync(p).mtimeMs }))
-        .sort((a, b) => b.m - a.m);
-      if (cands.length) return { exe: cands[0].p, prefix: [], found: true };
-    }
-    return { found: false };
-  }
-  if (member === "grok") {
-    const exe = join(HOME, ".grok", "bin", "grok.exe");
-    return existsSync(exe) ? { exe, prefix: [], found: true } : { found: false };
-  }
-  return { found: false };
 }
 
 export function runsTodayForAccount(store, account) {
@@ -239,7 +201,7 @@ export async function spawnMember(store, member, argvOrPacket, opts = {}) {
   if (member === "codex" && role === "build" && !result.timedOut && !opts.skipBuildVerify) {
     // The Codex desktop CLI keeps rollout records in its real profile even
     // when HOME/TEMP are redirected for the Windows sandbox worker.
-    buildCheck = codex.verifyBuildResult(result, {home: process.env.CODEX_HOME || process.env.USERPROFILE || process.env.HOME});
+    buildCheck = codex.verifyBuildResult(result, {codexHome: process.env.CODEX_HOME, home: process.env.USERPROFILE || process.env.HOME});
     if (!buildCheck.ok) {
       result.refused = buildCheck.refused;
       result.buildPolicy = buildCheck.policy;

@@ -1,0 +1,14 @@
+{
+  "workspace": "C:\\Users\\steam\\AppData\\Local\\Temp\\council-approved-release-proof-epQp9R",
+  "planner": "codex",
+  "worker": "cursor",
+  "workerModel": "composer-2.5",
+  "objective": "In this disposable test only, change answer.mjs to export answer = 2. Do not change answer.test.mjs. Return a checked patch, then verify with node --test answer.test.mjs.",
+  "maximumRuns": {
+    "codex": 2,
+    "cursor": 1
+  },
+  "maximumSeconds": 600,
+  "trust": "Only this exact disposable directory, only during this process",
+  "status": "prepared; no provider calls"
+}

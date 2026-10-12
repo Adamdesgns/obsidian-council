@@ -210,4 +210,50 @@ process.exit(0);
       cleanup(home, store);
     }
   });
+
+  it("reply batches and their acknowledgement commit together or roll back together", () => {
+    const home = tempHome();
+    const store = openStore({ home });
+    const outbox = createOutbox(store);
+    try {
+      const root = outbox.send({ sender: "owner", recipient: "codex", content: "Review", chain: ["codex", "grok"], chain_hop: 0, idempotency_key: "atomic-root" });
+      const lease = outbox.claim("codex");
+      const replies = [
+        { sender: "codex", recipient: "grok", content: "Please critique", idempotency_key: "atomic-peer-1", advance_chain: { root_id: root.message.id, hop: 1 } },
+        { sender: "codex", recipient: "owner", content: "Review started", idempotency_key: "atomic-owner-1" },
+      ];
+      assert.throws(() => outbox.respond(lease.delivery.id, lease.gen, { actor: "codex", status: "waiting" }, [replies[0], { ...replies[1], id: root.message.id }]), /UNIQUE/);
+      assert.equal(store.prepare("SELECT status FROM deliveries WHERE id=?").get(lease.delivery.id).status, "leased");
+      assert.equal(store.prepare("SELECT chain_hop FROM messages WHERE id=?").get(root.message.id).chain_hop, 0);
+      assert.equal(store.prepare("SELECT COUNT(*) n FROM messages").get().n, 1);
+      const accepted = outbox.respond(lease.delivery.id, lease.gen, { actor: "codex", status: "waiting" }, replies);
+      assert.equal(accepted.ok, true);
+      assert.equal(accepted.sent.length, 2);
+      assert.equal(accepted.ack.delivery.status, "waiting");
+      assert.equal(store.prepare("SELECT chain_hop FROM messages WHERE id=?").get(root.message.id).chain_hop, 1);
+      const duplicate = outbox.respond(lease.delivery.id, lease.gen, { actor: "codex", status: "waiting" }, replies);
+      assert.equal(duplicate.ack.duplicate, true);
+      assert.equal(store.prepare("SELECT COUNT(*) n FROM messages").get().n, 3);
+      assert.equal(store.verifyChain().ok, true);
+    } finally {
+      cleanup(home, store);
+    }
+  });
+
+  it("an empty reply batch acknowledges without creating a message", () => {
+    const home = tempHome();
+    const store = openStore({ home });
+    const outbox = createOutbox(store);
+    try {
+      outbox.send({ sender: "owner", recipient: "codex", content: "No response needed", idempotency_key: "ack-only" });
+      const lease = outbox.claim("codex");
+      const result = outbox.respond(lease.delivery.id, lease.gen, { actor: "codex", status: "answered" }, []);
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.sent, []);
+      assert.equal(result.ack.delivery.status, "answered");
+      assert.equal(store.prepare("SELECT COUNT(*) n FROM messages").get().n, 1);
+    } finally {
+      cleanup(home, store);
+    }
+  });
 });

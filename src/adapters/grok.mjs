@@ -20,7 +20,7 @@ export function argsFor(packet, { resume = null, persist = false, newId = null, 
     "--no-subagents",
     "--disable-web-search",
     "--cwd", cwd,
-    ...(role==="build"&&model?["-m",model]:[]),
+    ...(model?["-m",model]:[]),
   ];
   if (resume) {
     // continue only — never -s with resume

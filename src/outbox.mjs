@@ -8,7 +8,7 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
   const store = owns ? openStore(storeOrOpts) : storeOrOpts;
   const leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
 
-  function send(envelope) {
+  function send(envelope, transactionApi = null) {
     if (!envelope || typeof envelope !== "object") throw new Error("envelope required");
     const key = envelope.idempotency_key;
     if (!key) throw new Error("idempotency_key required");
@@ -31,7 +31,7 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
     }
 
     try {
-      const committed = store.commit("message_sent", envelope.sender || "unknown", (api) => {
+      const write = (api) => {
         const again = api.prepare(
           "SELECT * FROM messages WHERE idempotency_key = ?"
         ).get(key);
@@ -109,7 +109,11 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
           deliveries,
           duplicate: false,
         };
-      });
+      };
+      // respond() shares this write with its acknowledgement transaction.
+      const committed = transactionApi
+        ? { result: write(transactionApi) }
+        : store.commit("message_sent", envelope.sender || "unknown", write);
       return committed.result;
     } catch (e) {
       if (/UNIQUE|constraint/i.test(String(e.message || e))) {
@@ -211,11 +215,54 @@ export function createOutbox(storeOrOpts = {}, opts = {}) {
     return committed.result;
   }
 
+  /** Save a member reply and acknowledge its leased delivery atomically. */
+  function respond(deliveryId, gen, result = {}, envelope = null) {
+    const actor = result.actor || "system";
+    const status = result.status || "acked";
+    const envelopes = envelope == null ? [] : Array.isArray(envelope) ? envelope : [envelope];
+    const sentShape = (items) => envelope == null ? {} : { sent: Array.isArray(envelope) ? items : items[0] };
+    const refused = (reason, details = {}) => ({ ok: false, reason, ack: { ok: false, reason, ...details } });
+    if (!["acked", "answered", "waiting"].includes(status)) throw new Error("invalid_response_status");
+    return store.commit("delivery_responded", actor, (api) => {
+      const row = api.prepare("SELECT * FROM deliveries WHERE id=?").get(deliveryId);
+      if (!row || row.recipient !== actor) {
+        api.setRef("deliveries", deliveryId, { refused: "delivery_not_owned" });
+        return refused("delivery_not_owned");
+      }
+      if (!Number.isSafeInteger(Number(gen)) || Number(gen) < 1 || Number(gen) !== row.attempt_gen) {
+        api.setRef("deliveries", deliveryId, { refused: "stale_generation", expected_gen: row.attempt_gen, got_gen: gen });
+        return refused("stale_generation", { expected_gen: row.attempt_gen, got_gen: gen });
+      }
+      if (["acked", "answered", "waiting"].includes(row.status)) {
+        const saved = envelopes.map((item) => api.prepare("SELECT * FROM messages WHERE idempotency_key=?").get(item.idempotency_key)).filter(Boolean);
+        api.setRef("deliveries", deliveryId, { duplicate: true, gen });
+        return {
+          ok: true,
+          ack: { ok: true, duplicate: true, delivery: row },
+          ...sentShape(saved.map((item) => ({ message: rowToMessage(item), deliveries: api.prepare("SELECT * FROM deliveries WHERE message_id=?").all(item.id), duplicate: true }))),
+        };
+      }
+      if (row.status !== "leased") {
+        api.setRef("deliveries", deliveryId, { refused: "delivery_not_leased", status: row.status });
+        return refused("delivery_not_leased");
+      }
+      const sent = envelopes.map((item) => send(item, api));
+      api.prepare("UPDATE deliveries SET status=?,lease_until=NULL,updated=? WHERE id=? AND attempt_gen=?")
+        .run(status, api.nowIso(), deliveryId, row.attempt_gen);
+      api.setRef("deliveries", deliveryId, { status, gen, message_id: row.message_id, reply_ids: sent.map((item) => item.message.id) });
+      return {
+        ok: true,
+        ack: { ok: true, delivery: api.prepare("SELECT * FROM deliveries WHERE id=?").get(deliveryId) },
+        ...sentShape(sent),
+      };
+    }).result;
+  }
+
   function close() {
     if (owns) store.close();
   }
 
-  return { send, claim, ack, store, close, leaseMs };
+  return { send, claim, ack, respond, store, close, leaseMs };
 }
 
 function normalizeRecipients(envelope) {
