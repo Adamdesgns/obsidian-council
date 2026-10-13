@@ -1,6 +1,6 @@
 # Council 0.2.0 release readiness — 2026-10-12
 
-This is a local release candidate. It has not replaced the running private app or been pushed to GitHub. Fresh live-provider and physical-phone acceptance are still required before calling the release fully verified.
+This is the 0.2.0 release candidate. Adam authorized publishing it to GitHub on 2026-10-12. It has not replaced the running private app. Fresh live-provider and physical-phone acceptance are still required before calling the release fully verified.
 
 ## What this candidate changes
 
@@ -20,7 +20,7 @@ The [browser report](../evidence/2026-10-12-release/browser-report.json) exercis
 
 The upgrade regression constructs the old 001/002 database, migrates it through the current schema, verifies historical messages/deliveries/sessions/event hashes and dummy credentials, creates a new work order, then reopens it. No production database was used.
 
-CLI help confirmed the installed Claude restricted flags and Cursor Ask/sandbox/trust flags. `npm run doctor` checks executable discovery offline; it does not establish sign-in or model availability. The Windows Node 24/26 GitHub Actions workflow is prepared but has not run remotely.
+CLI help confirmed the installed Claude restricted flags and Cursor Ask/sandbox/trust flags. `npm run doctor` checks executable discovery offline; it does not establish sign-in or model availability. The Windows Node 24/26 workflow runs on each push; check [GitHub Actions](https://github.com/Adamdesgns/obsidian-council/actions) for its result on the published commit.
 
 Earlier real Codex/Claude workflow records remain in [the September 22 evidence](../evidence/2026-09-22-windows-codex/REPORT.md). Earlier Grok patch and usage-reader findings are in [the meters/coding report](../evidence/2026-09-22-meters-coding/REPORT.md). They establish historical results, not fresh validation of today's candidate.
 
@@ -28,7 +28,7 @@ Earlier real Codex/Claude workflow records remain in [the September 22 evidence]
 
 1. **Approve the prepared live check.** It uses two signed-in Codex calls and one Cursor `composer-2.5` call, trusts only one disposable folder and stops after ten minutes. The exact plan must be reviewed before coding. The verifier permits only the approved constant change and executes only the unchanged test. No actual project is edited. See [live-proof-plan.json](../evidence/2026-10-12-release/live-proof-plan.json).
 2. **Check the private phone flow on an actual iPhone.** Open its private link through Tailscale, create a chamber, submit a message, review/approve a tiny work order, reload and operate HALT. A new private-app launch/replacement needs Adam's approval.
-3. **Publish only after Adam's explicit push instruction.** The release branch contains the local feature history and these repairs; GitHub's existing main remains unchanged. Run the new CI matrix after publication, inspect its outcome, then approve any launch-page update separately.
+3. **Verify the authorized publication.** Adam's 2026-10-12 push instruction covers the tested candidate and these release records. Confirm GitHub main matches the release commit and both Windows CI jobs pass. Any launch-page deployment remains a separate decision.
 
 Fresh Claude/Grok account behavior and live allowance readings were not exercised during this preparation. Cursor/Grok allowance remains manually entered and labeled; no automatic meter is promised for them. Jev remains deferred under the previous scope decision.
 
